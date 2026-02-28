@@ -7,30 +7,44 @@ import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:razorpay_flutter/razorpay_flutter.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_sound/flutter_sound.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:flutter_sound/flutter_sound.dart';
+import 'package:path_provider/path_provider.dart';
+import 'dart:async';
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
-import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp();
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+
+  FirebaseMessaging.onBackgroundMessage(
+      _firebaseMessagingBackgroundHandler);
+
   runApp(const MyApp());
 }
+
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
+    return MaterialApp(
+      navigatorKey: navigatorKey,
       debugShowCheckedModeBanner: false,
-      home: AuthCheckScreen(), // 🔥 YE IMPORTANT HAI
+      home: const AuthCheckScreen(),
     );
   }
 }
@@ -73,14 +87,15 @@ class _AuthCheckScreenState extends State<AuthCheckScreen> {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => DashboardScreen(role: role),
+          builder: (context) => DashboardScreen(role: role),
         ),
       );
+
     } else {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => const RoleSelectionScreen(),
+          builder: (context) => const RoleSelectionScreen(),
         ),
       );
     }
@@ -520,6 +535,8 @@ class NextScreen extends StatelessWidget {
 
 // ===== _ProfileSetupScreen =====
 
+
+
 class ProfileSetupScreen extends StatefulWidget {
   final String role;
 
@@ -540,6 +557,13 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
 
   File? selectedImage;
   String? imageUrl;
+
+  final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
+  String? audioPath;
+  bool isRecording = false;
+  int recordingSeconds = 0;
+  Timer? recordingTimer;
+
   bool isLoading = false;
 
   String? selectedState;
@@ -551,6 +575,64 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
     "Uttar Pradesh": ["Lucknow", "Kanpur", "Agra"],
     "Madhya Pradesh": ["Bhopal", "Indore", "Gwalior"],
   };
+
+  // ================= AUDIO RECORD =================
+  Future<void> startRecording() async {
+    await _recorder.openRecorder();
+
+    final dir = await getTemporaryDirectory();
+    String path =
+        "${dir.path}/intro_${DateTime.now().millisecondsSinceEpoch}.aac";
+
+    await _recorder.startRecorder(
+      toFile: path,
+      codec: Codec.aacADTS,
+    );
+
+    setState(() {
+      isRecording = true;
+      audioPath = path;
+      recordingSeconds = 0;
+    });
+
+    recordingTimer = Timer.periodic(
+      const Duration(seconds: 1),
+          (timer) {
+        setState(() {
+          recordingSeconds++;
+        });
+      },
+    );
+  }
+  Future<void> stopRecording() async {
+    recordingTimer?.cancel();
+
+    await _recorder.stopRecorder();
+
+    setState(() {
+      isRecording = false;
+    });
+
+
+  }
+
+  Future<String?> uploadAudio(File file) async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return null;
+
+      final ref = FirebaseStorage.instance
+          .ref()
+          .child("profile_audio/${user.uid}.m4a");
+
+      await ref.putFile(file);
+      return await ref.getDownloadURL();
+    } catch (e) {
+      print("Audio upload error: $e");
+      return null;
+    }
+  }
+
 
   // 📸 PICK IMAGE
   Future<void> pickImage() async {
@@ -647,11 +729,15 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       Position position = await getUserLocation();
 
       String? finalImageUrl = imageUrl;
+      String? finalAudioUrl;
+
+      if (audioPath != null) {
+        finalAudioUrl = await uploadAudio(File(audioPath!));
+      }
 
       if (selectedImage != null) {
         finalImageUrl = await uploadImage(selectedImage!);
       }
-
       await FirebaseFirestore.instance
           .collection("users")
           .doc(user.uid)
@@ -665,11 +751,23 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
         "pin": pinController.text.trim(),
         "dp": finalImageUrl ?? "",
 
-        /// 🔥 NEW FIELDS
+        // 🔥 IMPORTANT DEFAULT FIELDS
+        "wallet": 0,
+        "totalJobs": 0,
+        "totalEarned": 0,
+        "isAvailable": true,
+
+        // ⭐ RATING SYSTEM DEFAULT
+        "rating": 0.0,
+        "totalRatings": 0,
+
         "latitude": position.latitude,
         "longitude": position.longitude,
 
         "createdAt": Timestamp.now(),
+
+        "audioUrl": finalAudioUrl ?? "",
+        "hasIntro": finalAudioUrl != null,
       });
 
       setState(() {
@@ -737,6 +835,36 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                 ),
 
                 const SizedBox(height: 30),
+
+                GestureDetector(
+                  onLongPressStart: (_) => startRecording(),
+                  onLongPressEnd: (_) => stopRecording(),
+                  child: Container(
+                    height: 55,
+                    decoration: BoxDecoration(
+                      color: isRecording ? Colors.red : Colors.green,
+                      borderRadius: BorderRadius.circular(30),
+                    ),
+                    child: Center(
+                      child: isRecording
+                          ? Text(
+                        "Recording... $recordingSeconds s",
+                        style: const TextStyle(color: Colors.white),
+                      )
+                          : const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.mic, color: Colors.white),
+                          SizedBox(width: 8),
+                          Text(
+                            "Hold to Record Intro",
+                            style: TextStyle(color: Colors.white),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
 
                 buildField("पूरा नाम", nameController),
 
@@ -817,8 +945,6 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
     );
   }
 
-
-
   Widget buildField(String hint, TextEditingController controller,
       {TextInputType keyboard = TextInputType.text}) {
     return Padding(
@@ -841,11 +967,23 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       ),
     );
   }
+
+  @override
+  void dispose() {
+
+    recordingTimer?.cancel();
+    nameController.dispose();
+    workTypeController.dispose();
+    areaController.dispose();
+    pinController.dispose();
+    super.dispose();
+  }
 }
 
+
+//============== DashboardScreen=============
 class DashboardScreen extends StatefulWidget {
   final String role;
-
   const DashboardScreen({super.key, required this.role});
 
   @override
@@ -853,265 +991,654 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  // Variables jo data store karenge
+  String name = "Loading...";
+  String dp = "";
+  String area = "...";
+  int wallet = 0;
+  bool isAvailable = true;
 
-  String name = "";
-  String area = "";
-  String dpUrl = "";
-  int walletBalance = 0;
-  bool isLoading = true;
-
-  late Razorpay _razorpay;
-  int rechargeAmount = 0;
 
   @override
   void initState() {
     super.initState();
-    fetchUserData();
-
-    _razorpay = Razorpay();
-    _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _handlePaymentSuccess);
-    _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _handlePaymentError);
-    _razorpay.on(Razorpay.EVENT_EXTERNAL_WALLET, _handleExternalWallet);
+    getUserData();
   }
 
-  @override
-  void dispose() {
-    _razorpay.clear();
-    super.dispose();
+
+
+  Widget _buildHorizontalMajdoorCard(
+      String name,
+      String work,
+      String area,
+      String dp,
+      bool isAvailable,
+      ) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+
+          /// Modern Accent Line
+          Container(
+            width: 4,
+            height: 75,
+            decoration: BoxDecoration(
+              color: isAvailable
+                  ? const Color(0xFF43A047)
+                  : Colors.grey,
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+
+          const SizedBox(width: 12),
+
+          /// Profile Image
+          CircleAvatar(
+            radius: 28,
+            backgroundColor: Colors.grey.shade200,
+            backgroundImage:
+            dp.isNotEmpty ? NetworkImage(dp) : null,
+            child: dp.isEmpty
+                ? Text(
+              name.isNotEmpty
+                  ? name[0].toUpperCase()
+                  : "",
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+              ),
+            )
+                : null,
+          ),
+
+          const SizedBox(width: 14),
+
+          /// Details Section
+          Expanded(
+            child: Column(
+              crossAxisAlignment:
+              CrossAxisAlignment.start,
+              children: [
+
+                /// Name + Availability Badge
+                Row(
+                  mainAxisAlignment:
+                  MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        name,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isAvailable
+                            ? const Color(0xFFE8F5E9)
+                            : Colors.grey.shade200,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        isAvailable ? "Available" : "Offline",
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                          color: isAvailable
+                              ? const Color(0xFF2E7D32)
+                              : Colors.grey,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 6),
+
+                /// Work Type
+                Text(
+                  work,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF1E88E5),
+                  ),
+                ),
+
+                const SizedBox(height: 6),
+
+                /// Location
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.location_on,
+                      size: 14,
+                      color: Colors.grey,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      area,
+                      style: TextStyle(
+                        color:
+                        Colors.grey.shade600,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
-
-  Future<void> fetchUserData() async {
-    try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) {
-        setState(() => isLoading = false);
-        return;
-      }
-
-      final doc = await FirebaseFirestore.instance
-          .collection("users")
-          .doc(user.uid)
-          .get();
-
+  // DATA FETCH KARNE KA FUNCTION
+  void getUserData() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      var doc = await FirebaseFirestore.instance.collection("users").doc(user.uid).get();
       if (doc.exists) {
         setState(() {
-          name = doc["name"] ?? "";
-          area = doc["area"] ?? "";
-          dpUrl = doc["dp"] ?? "";
-          walletBalance = doc["wallet"] ?? 0;
-          isLoading = false;
+          name = doc.data()?['name'] ?? "No Name";
+          dp = doc.data()?['dp'] ?? "";
+          area = doc.data()?['area'] ?? "";
+          wallet = doc.data()?['wallet'] ?? 0;
         });
-      } else {
-        setState(() => isLoading = false);
       }
-
-    } catch (e) {
-      setState(() => isLoading = false);
     }
   }
 
-  /// 🔥 OPEN RAZORPAY
-  void openRazorpay(int amount) {
-    rechargeAmount = amount;
+  // ================= NEARBY JOBS METHOD =================
+  Widget _buildNearbyJobs() {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _getNearbyJobs(),
+      builder: (context, snapshot) {
 
-    var options = {
-      'key': 'rzp_test_SJeW8zM6X7fQQI',
-      'amount': amount * 100,
-      'name': 'KaamDwaar Wallet',
-      'description': 'Wallet Recharge',
-      'timeout': 60,
-      'prefill': {
-        'contact': '9999999999',
-        'email': 'test@test.com'
-      }
-    };
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
 
-    try {
-      _razorpay.open(options);
-    } catch (e) {
-      print("Razorpay Error: $e");
-    }
-  }
+        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+          return const Center(
+            child: Text("कोई nearby मजदूर नहीं मिला"),
+          );
+        }
 
-  /// ✅ PAYMENT SUCCESS
-  void _handlePaymentSuccess(PaymentSuccessResponse response) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+        var workers = snapshot.data!;
 
-    await FirebaseFirestore.instance
-        .collection("users")
-        .doc(user.uid)
-        .update({
-      "wallet": FieldValue.increment(rechargeAmount),
-    });
+        return SizedBox(
+          height: 260, // Mazdoor list card height
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            itemCount: workers.length,
+            itemBuilder: (context, index) {
 
-    fetchUserData();
+              var data = workers[index];
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("₹$rechargeAmount Added Successfully")),
-    );
-  }
+              return Container(
+                width: MediaQuery.of(context).size.width * 0.9,
+                margin: const EdgeInsets.only(right: 12),
+                child: buildMazdoorCard(
+                  workerId: data["id"],
+                  currentUserId: FirebaseAuth.instance.currentUser!.uid,
+                  data: data,
+                  processHireWithCommission: processHireWithCommission,
 
-  /// ❌ PAYMENT FAILED
-  void _handlePaymentError(PaymentFailureResponse response) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Payment Failed ❌")),
-    );
-  }
-
-  void _handleExternalWallet(ExternalWalletResponse response) {}
-
-  /// 💰 WALLET DIALOG
-  void showWalletDialog() {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text("Wallet"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text("Available Balance: ₹$walletBalance"),
-              const SizedBox(height: 20),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  openRazorpay(50); // 🔥 Recharge ₹50
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
                 ),
-                child: const Text("Add ₹50"),
-              ),
-              const SizedBox(height: 10),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  openRazorpay(100); // 🔥 Recharge ₹100
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
-                ),
-                child: const Text("Add ₹100"),
-              ),
-            ],
+              );
+            },
           ),
         );
       },
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
+  Future<void> processHireWithCommission({
+    required String user1Id,
+    required String user2Id,
+  }) async {
 
-    if (isLoading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+    const int commission = 5;
+
+    await FirebaseFirestore.instance.runTransaction((transaction) async {
+
+      DocumentReference user1Ref =
+      FirebaseFirestore.instance.collection("users").doc(user1Id);
+
+      DocumentReference user2Ref =
+      FirebaseFirestore.instance.collection("users").doc(user2Id);
+
+      DocumentReference adminRef =
+      FirebaseFirestore.instance.collection("admin").doc("main");
+
+      DocumentSnapshot user1Snap = await transaction.get(user1Ref);
+      DocumentSnapshot user2Snap = await transaction.get(user2Ref);
+      DocumentSnapshot adminSnap = await transaction.get(adminRef);
+
+      int user1Wallet = user1Snap["wallet"] ?? 0;
+      int user2Wallet = user2Snap["wallet"] ?? 0;
+      int adminWallet = adminSnap["wallet"] ?? 0;
+
+      if (user1Wallet < commission || user2Wallet < commission) {
+        throw Exception("₹5 Balance Required");
+      }
+
+      transaction.update(user1Ref, {
+        "wallet": user1Wallet - commission,
+      });
+
+      transaction.update(user2Ref, {
+        "wallet": user2Wallet - commission,
+      });
+
+      transaction.update(adminRef, {
+        "wallet": adminWallet + (commission * 2),
+        "totalEarning": FieldValue.increment(commission * 2),
+      });
+    });
+  }
+  Future<List<Map<String, dynamic>>> _getNearbyJobs() async {
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return [];
+
+    var userDoc = await FirebaseFirestore.instance
+        .collection("users")
+        .doc(user.uid)
+        .get();
+
+    if (!userDoc.exists) return [];
+
+    double userLat = (userDoc.data()?["latitude"] ?? 0).toDouble();
+    double userLng = (userDoc.data()?["longitude"] ?? 0).toDouble();
+
+    var snapshot = await FirebaseFirestore.instance
+        .collection("users")
+        .where(
+      "role",
+      isEqualTo: widget.role == "मज़दूर" ? "ठेकेदार" : "मज़दूर",
+    )
+        .where("isAvailable", isEqualTo: true) // 🔥 important
+        .get();
+
+    List<Map<String, dynamic>> nearbyWorkers = [];
+
+
+
+    for (var doc in snapshot.docs) {
+
+      // 🔥 apne aap ko skip karo
+      if (doc.id == user.uid) continue;
+
+      var data = doc.data();
+
+      double workerLat = (data["latitude"] ?? 0).toDouble();
+      double workerLng = (data["longitude"] ?? 0).toDouble();
+
+      double distance = Geolocator.distanceBetween(
+          userLat, userLng, workerLat, workerLng);
+
+      // 🔥 5 KM radius
+      data["distance"] = distance;
+      data["id"] = doc.id; // 🔥 document id add karo
+      nearbyWorkers.add(data);
     }
 
+    // distance wise sort
+    nearbyWorkers.sort(
+          (a, b) => a["distance"].compareTo(b["distance"]),
+    );
+
+    return nearbyWorkers;
+  }
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF2F2F2),
 
+      // ================= SIDE DRAWER (Wallet shift yahan kiya hai) =================
+      drawer: _buildDrawer(context),
+
       appBar: AppBar(
-        backgroundColor: Colors.green,
-        title: const Text("Dashboard"),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.black),
+        title: const Text("Dashboard", style: TextStyle(color: Colors.black, fontSize: 16)),
       ),
 
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ================= PROFILE HEADER =================
+              _buildCompactProfile(),
 
-            /// Profile Card
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Row(
+              const SizedBox(height: 15),
+
+              // ================= BANNER PLACEHOLDER (Balance/Trans ki jagah) =================
+              _buildBannerSlider(),
+
+              const SizedBox(height: 15),
+
+
+              // ================= NAV BUTTONS =================
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  CircleAvatar(
-                    radius: 30,
-                    backgroundColor: Colors.green,
-                    backgroundImage:
-                    dpUrl.isNotEmpty ? NetworkImage(dpUrl) : null,
-                    child: dpUrl.isEmpty
-                        ? const Icon(Icons.person, color: Colors.white)
-                        : null,
-                  ),
-                  const SizedBox(width: 15),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(name,
-                          style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold)),
-                      Text(widget.role,
-                          style: const TextStyle(color: Colors.black54)),
-                      Text(area),
-                    ],
-                  )
+                  _smallNavButton(Icons.people_alt, "मजदूर लिस्ट", Colors.blue, () {
+                    Navigator.push(context, MaterialPageRoute(builder: (context) => MajdoorListScreen()));
+                  }),
+                  _smallNavButton(Icons.business, "ठेकेदार लिस्ट", Colors.purple, () {
+                    Navigator.push(context, MaterialPageRoute(builder: (context) => ThekedarListScreen()));
+                  }),
+                  _smallNavButton(Icons.chat_bubble, "चैट", Colors.deepPurple, () {
+                    // Chat ke liye code yahan aayega
+                  }),
                 ],
               ),
+
+
+              const SizedBox(height: 18),
+
+
+              // ================= NEARBY JOBS =================
+              _smallSectionHeader("Nearby Jobs"),
+              const SizedBox(height: 8),
+
+              _buildNearbyJobs(),
+
+              const SizedBox(height: 18),
+              // ================= WORK HISTORY =================
+              _smallSectionHeader("My Work History"),
+              const SizedBox(height: 8),
+              _compactJobScroll([
+                _compactJobItem("Brickwork", "Civil Lines", "₹8002 dy", 4),
+                _compactJobItem("Unloading Cement", "Sahadatganj", "₹200", 4),
+              ]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // --- Drawer Widget (Wallet Option Yahan Hai) ---
+  Widget _buildDrawer(BuildContext context) {
+
+    String uid = FirebaseAuth.instance.currentUser!.uid;
+
+    return Drawer(
+      child: StreamBuilder<DocumentSnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection("users")
+            .doc(uid)
+            .snapshots(),
+        builder: (context, snapshot) {
+
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          var data = snapshot.data!.data() as Map<String, dynamic>;
+
+          String audioUrl = data["audioUrl"] ?? "";
+          String name = data["name"] ?? "";
+          String role = data["role"] ?? "";
+          String dp = data["dp"] ?? "";
+          int wallet = data["wallet"] ?? 0;
+
+          return ListView(
+            padding: EdgeInsets.zero,
+            children: [
+
+              // 🔥 HEADER
+              UserAccountsDrawerHeader(
+                decoration: const BoxDecoration(color: Colors.green),
+
+                accountName: Text(
+                  name,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+
+                accountEmail: Text(role),
+
+                currentAccountPicture: CircleAvatar(
+                  backgroundImage:
+                  dp.isNotEmpty ? NetworkImage(dp) : null,
+                  child: dp.isEmpty
+                      ? const Icon(Icons.person, size: 40)
+                      : null,
+                ),
+              ),
+
+              // 💰 REAL WALLET TILE
+              ListTile(
+                leading: const Icon(Icons.account_balance_wallet, color: Colors.green),
+                title: const Text("My Wallet"),
+                subtitle: Text(
+                  "Available: ₹$wallet",
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const WalletScreen(),
+                    ),
+                  );
+                },
+              ),
+
+
+
+              const Divider(),
+
+              ListTile(
+                leading: const Icon(Icons.settings),
+                title: const Text("Settings"),
+                onTap: () {},
+              ),
+
+              const Divider(),
+
+              ListTile(
+                leading: const Icon(Icons.logout, color: Colors.red),
+                title: const Text("Logout"),
+                onTap: () async {
+
+                  final user = FirebaseAuth.instance.currentUser;
+
+                  if (user != null) {
+                    await FirebaseFirestore.instance
+                        .collection("users")
+                        .doc(user.uid)
+                        .set({
+                      "isAvailable": false,
+                    }, SetOptions(merge: true));
+                  }
+
+                  await FirebaseAuth.instance.signOut();
+
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(builder: (_) => const LoginScreen()),
+                        (route) => false,
+                  );
+                },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // --- Banner Placeholder (Upar wale dono card hata kar ye lagaya hai) ---
+  Widget _buildBannerSlider() {
+    return SizedBox(
+      height: 150,
+      child: PageView(
+        children: [
+
+          _bannerImage("assets/images/banner1.png"),
+          _bannerImage("assets/images/banner2.png"),
+          _bannerImage("assets/images/banner1.png"),
+
+        ],
+      ),
+    );
+  }
+
+  Widget _bannerImage(String imagePath) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 5),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        image: DecorationImage(
+          image: AssetImage(imagePath),
+          fit: BoxFit.cover,
+        ),
+      ),
+    );
+  }
+
+  // --- Profile Header ---
+  Widget _buildCompactProfile() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+
+              // 🔥 REAL DP
+              CircleAvatar(
+                radius: 28,
+                backgroundImage: dp.isNotEmpty
+                    ? NetworkImage(dp)
+                    : null,
+                child: dp.isEmpty
+                    ? const Icon(Icons.person)
+                    : null,
+              ),
+
+              const SizedBox(width: 10),
+
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+
+                    // 🔥 REAL NAME
+                    Text(
+                      name,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+
+                    // 🔥 ROLE
+                    Text(
+                      widget.role,
+                      style: const TextStyle(
+                        color: Colors.grey,
+                        fontSize: 13,
+                      ),
+                    ),
+
+                    const SizedBox(height: 4),
+
+                    // 🔥 REAL AREA
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.location_on,
+                          size: 12,
+                          color: Colors.grey,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          area,
+                          style: const TextStyle(
+                            color: Colors.grey,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              _buildAvailabilityToggle(),
+            ],
+          ),
+
+          const SizedBox(height: 10),
+
+          _smallProfileProgress(),
+        ],
+      ),
+    );
+  }
+
+
+
+  Widget _buildAvailabilityToggle() {
+    return GestureDetector(
+      onTap: toggleAvailability,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: isAvailable ? Colors.green : Colors.grey,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              isAvailable ? Icons.check_circle : Icons.cancel,
+              color: Colors.white,
+              size: 14,
             ),
-
-            const SizedBox(height: 30),
-
-            GridView.count(
-              shrinkWrap: true,
-              crossAxisCount: 2,
-              mainAxisSpacing: 15,
-              crossAxisSpacing: 15,
-              physics: const NeverScrollableScrollPhysics(),
-              children: [
-
-                dashboardCard(
-                  Icons.account_balance_wallet,
-                  "₹$walletBalance",
-                  Colors.green,
-                      () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const WalletScreen(),
-                      ),
-                    );
-                  },
-                ),
-
-                dashboardCard(
-                  Icons.people,
-                  "मजदूर लिस्ट",
-                  Colors.blue,
-                      () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) =>
-                        const MazdoorListScreen(),
-                      ),
-                    );
-                  },
-                ),
-
-                dashboardCard(
-                  Icons.business,
-                  "ठेकेदार लिस्ट",
-                  Colors.purple,
-                      () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) =>
-                        const ThekedaarListScreen(),
-                      ),
-                    );
-                  },
-                ),
-              ],
+            const SizedBox(width: 5),
+            Text(
+              isAvailable ? "Available" : "Offline",
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ],
         ),
@@ -1119,38 +1646,1103 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget dashboardCard(
-      IconData icon,
-      String title,
-      Color color,
-      VoidCallback onTap,
-      ) {
+  Future<void> toggleAvailability() async {
+    String uid = FirebaseAuth.instance.currentUser!.uid;
+
+    setState(() {
+      isAvailable = !isAvailable;
+    });
+
+    await FirebaseFirestore.instance
+        .collection("users")
+        .doc(uid)
+        .update({
+      "isAvailable": isAvailable,
+    });
+  }
+
+  Widget _smallProfileProgress() {
+    return Row(
+      children: [
+        const Icon(Icons.check_circle, color: Colors.green, size: 16),
+        const SizedBox(width: 6),
+        const Text("Profile 60%", style: TextStyle(color: Colors.green, fontSize: 11, fontWeight: FontWeight.bold)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(5),
+            child: LinearProgressIndicator(
+              value: 0.6,
+              minHeight: 5,
+              backgroundColor: Colors.grey.shade100,
+              valueColor: const AlwaysStoppedAnimation<Color>(Colors.green),
+            ),
+          ),
+        )
+      ],
+    );
+  }
+
+  // Ye naya code hai jo click karne par dusri screen par le jayega
+  Widget _smallNavButton(IconData icon, String text, Color color, VoidCallback onTap) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: onTap, // Click hone par kya hoga, wo yahan se decide hoga
       child: Container(
+        width: 95,
+        padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 40, color: color),
-            const SizedBox(height: 10),
-            Text(title,
-                style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: color)),
+          borderRadius: BorderRadius.circular(18),
+          // Thoda shadow add kiya hai taaki button jaisa lage
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 5,
+              offset: const Offset(0, 2),
+            ),
           ],
         ),
+        child: Column(
+          children: [
+            Icon(icon, color: color, size: 26),
+            const SizedBox(height: 4),
+            Text(text,
+              style: TextStyle(
+                  color: color,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 10
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _smallSectionHeader(String title) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        const Text("और देखें >", style: TextStyle(color: Colors.grey, fontSize: 11))
+      ],
+    );
+  }
+
+  Widget _compactJobScroll(List<Widget> items) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(),
+      child: Row(children: items),
+    );
+  }
+
+  Widget _compactJobItem(String title, String loc, String price, int stars) {
+    return Container(
+      width: 185,
+      margin: const EdgeInsets.only(right: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+          Text(loc, style: const TextStyle(color: Colors.grey, fontSize: 10)),
+          const SizedBox(height: 4),
+          Row(children: List.generate(5, (i) => Icon(Icons.star, size: 10, color: i < stars ? Colors.orange : Colors.grey.shade200))),
+          const SizedBox(height: 10),
+          // Yahan se maine Price (RS) hata diya hai
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end, // Button ko right side rakhne ke liye
+            children: [
+              Container(
+                height: 24,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(color: Colors.green, borderRadius: BorderRadius.circular(6)),
+                child: const Center(
+                    child: Text("Apply", style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold))
+                ),
+              )
+            ],
+          )
+        ],
       ),
     );
   }
 }
 
-// =====PaymentSuccess); =====
 
+//================= MAJDOOR LIST =================
+
+class MajdoorListScreen extends StatefulWidget {
+  const MajdoorListScreen({super.key});
+
+  @override
+  State<MajdoorListScreen> createState() => _MajdoorListScreenState();
+}
+
+class _MajdoorListScreenState extends State<MajdoorListScreen> {
+
+  // 🔥 ₹5 + ₹5 Commission System
+  Future<void> processHireWithCommission({
+    required String user1Id,
+    required String user2Id,
+  }) async {
+
+    const int commission = 5;
+
+    await FirebaseFirestore.instance.runTransaction((transaction) async {
+
+      DocumentReference user1Ref =
+      FirebaseFirestore.instance.collection("users").doc(user1Id);
+
+      DocumentReference user2Ref =
+      FirebaseFirestore.instance.collection("users").doc(user2Id);
+
+      DocumentReference adminRef =
+      FirebaseFirestore.instance.collection("admin").doc("main");
+
+      DocumentSnapshot user1Snap = await transaction.get(user1Ref);
+      DocumentSnapshot user2Snap = await transaction.get(user2Ref);
+      DocumentSnapshot adminSnap = await transaction.get(adminRef);
+
+      int user1Wallet = user1Snap["wallet"] ?? 0;
+      int user2Wallet = user2Snap["wallet"] ?? 0;
+      int adminWallet = adminSnap["wallet"] ?? 0;
+
+      if (user1Wallet < commission ||
+          user2Wallet < commission) {
+        throw Exception("₹5 Balance Required");
+      }
+
+      // 🔻 Deduct ₹5 from both users
+      transaction.update(user1Ref, {
+        "wallet": user1Wallet - commission,
+      });
+
+      transaction.update(user2Ref, {
+        "wallet": user2Wallet - commission,
+      });
+
+      // 🔺 Add ₹10 to Admin
+      transaction.update(adminRef, {
+        "wallet": adminWallet + (commission * 2),
+        "totalEarning": FieldValue.increment(commission * 2),
+      });
+
+      // 🔥 User1 Transaction
+      transaction.set(
+        user1Ref.collection("transactions").doc(),
+        {
+          "amount": commission,
+          "type": "debit",
+          "message": "Platform Fee",
+          "createdAt": Timestamp.now(),
+        },
+      );
+
+      // 🔥 User2 Transaction
+      transaction.set(
+        user2Ref.collection("transactions").doc(),
+        {
+          "amount": commission,
+          "type": "debit",
+          "message": "Platform Fee",
+          "createdAt": Timestamp.now(),
+        },
+      );
+
+      // 🔥 Admin Transaction
+      transaction.set(
+        adminRef.collection("transactions").doc(),
+        {
+          "amount": commission * 2,
+          "type": "credit",
+          "message": "Platform Commission",
+          "createdAt": Timestamp.now(),
+        },
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+
+    String currentUserId =
+        FirebaseAuth.instance.currentUser!.uid;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF2F2F2),
+
+      appBar: AppBar(
+        title: const Text("मजदूर लिस्ट",
+            style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.black),
+      ),
+
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection("users")
+            .where("role", isEqualTo: "मज़दूर")
+            .snapshots(),
+        builder: (context, snapshot) {
+
+          if (snapshot.connectionState ==
+              ConnectionState.waiting) {
+            return const Center(
+                child: CircularProgressIndicator());
+          }
+
+          if (!snapshot.hasData ||
+              snapshot.data!.docs.isEmpty) {
+            return const Center(
+                child: Text("कोई मजदूर उपलब्ध नहीं है"));
+          }
+
+          var docs = snapshot.data!.docs;
+
+          return ListView.builder(
+            padding:
+            const EdgeInsets.symmetric(vertical: 10),
+            itemCount: docs.length,
+            itemBuilder: (context, index) {
+
+              var doc = docs[index];
+              var data =
+              doc.data() as Map<String, dynamic>;
+
+              String workerId = doc.id;
+
+              // 🔥 Apne aap ko list me mat dikhao
+              if (workerId == currentUserId) {
+                return const SizedBox();
+              }
+
+              String audioUrl = data["audioUrl"] ?? "";
+              String name = data["name"] ?? "";
+              String work = data["workType"] ?? "";
+              String area = data["area"] ?? "";
+              String dp = data["dp"] ?? "";
+
+              double distance =
+              (data["distance"] ?? 0).toDouble();
+
+              bool isAvailable = data["isAvailable"] ?? false;
+
+              double rating =
+              (data["rating"] ?? 0.0).toDouble();
+
+              int totalRatings =
+              (data["totalRatings"] ?? 0);
+
+              String? rate = data["rate"]?.toString();
+
+              return Container(
+                margin: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 10),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(22),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.05),
+                      blurRadius: 12,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  children: [
+
+                    /// ===== TOP SECTION =====
+                    Row(
+                      children: [
+
+                        /// DP with Green Ring
+                        Container(
+                          padding: const EdgeInsets.all(3),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: isAvailable
+                                  ? Colors.green
+                                  : Colors.grey,
+                              width: 2,
+                            ),
+                          ),
+                          child: CircleAvatar(
+                            radius: 30,
+                            backgroundImage:
+                            dp.isNotEmpty
+                                ? NetworkImage(dp)
+                                : null,
+                            child: dp.isEmpty
+                                ? Text(
+                              name.isNotEmpty
+                                  ? name[0]
+                                  : "",
+                              style: const TextStyle(
+                                  fontSize: 20,
+                                  fontWeight:
+                                  FontWeight.bold),
+                            )
+                                : null,
+                          ),
+                        ),
+
+                        const SizedBox(width: 14),
+
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment:
+                            CrossAxisAlignment.start,
+                            children: [
+
+                              /// Name + Active
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      name,
+                                      style: const TextStyle(
+                                        fontSize: 17,
+                                        fontWeight:
+                                        FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                  Icon(Icons.circle,
+                                      size: 10,
+                                      color: isAvailable
+                                          ? Colors.green
+                                          : Colors.grey),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    isAvailable
+                                        ? "Active"
+                                        : "Offline",
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: isAvailable
+                                          ? Colors.green
+                                          : Colors.grey,
+                                    ),
+                                  ),
+                                ],
+                              ),
+
+                              const SizedBox(height: 4),
+
+                              /// Work Type
+                              Text(
+                                work,
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const Divider(height: 20),
+
+                    /// Location + Distance
+                    Row(
+                      children: [
+                        const Icon(Icons.location_on,
+                            size: 16,
+                            color: Colors.grey),
+                        const SizedBox(width: 6),
+                        Text(
+                          "$area • ${distance < 1000
+                              ? "${distance.toStringAsFixed(0)} m"
+                              : "${(distance / 1000).toStringAsFixed(1)} KM"}",
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: Colors.black54,
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const Divider(height: 20),
+
+                    /// Rating + Rate
+                    Row(
+                      mainAxisAlignment:
+                      MainAxisAlignment.spaceBetween,
+                      children: [
+
+                        Row(
+                          children: [
+                            const Icon(Icons.star,
+                                size: 16,
+                                color: Colors.orange),
+                            const SizedBox(width: 4),
+                            Text(
+                              "${rating.toStringAsFixed(1)} ($totalRatings)",
+                              style: const TextStyle(
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        Text(
+                          rate != null && rate.isNotEmpty
+                              ? "₹$rate / Day"
+                              : "Rate Negotiable",
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.green,
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    /// Bottom Buttons
+                    Row(
+                      children: [
+
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () async {
+
+                              if (audioUrl.isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text("No intro available")),
+                                );
+                                return;
+                              }
+
+                              final player = AudioPlayer();
+                              await player.setUrl(audioUrl);
+                              player.play();
+                            },
+                            child: Container(
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: Colors.green.shade50,
+                                borderRadius: BorderRadius.circular(25),
+                              ),
+                              child: const Center(
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.mic, size: 18),
+                                    SizedBox(width: 6),
+                                    Text("Listen Intro"),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+
+                        Expanded(
+                          child: SizedBox(
+                            height: 40,
+                            child: ElevatedButton(
+                              onPressed: () async {
+                                try {
+                                  await processHireWithCommission(
+                                    user1Id:
+                                    currentUserId,
+                                    user2Id:
+                                    workerId,
+                                  );
+                                  ScaffoldMessenger.of(
+                                      context)
+                                      .showSnackBar(
+                                    const SnackBar(
+                                        content: Text(
+                                            "₹5 Platform Fee Paid")),
+                                  );
+                                } catch (e) {
+                                  ScaffoldMessenger.of(
+                                      context)
+                                      .showSnackBar(
+                                    SnackBar(
+                                        content:
+                                        Text(e.toString())),
+                                  );
+                                }
+                              },
+                              style:
+                              ElevatedButton
+                                  .styleFrom(
+                                backgroundColor:
+                                Colors.green,
+                                shape:
+                                RoundedRectangleBorder(
+                                  borderRadius:
+                                  BorderRadius.circular(
+                                      25),
+                                ),
+                              ),
+                              child: const Text(
+                                "Hire ₹5",
+                                style: TextStyle(
+                                    fontWeight:
+                                    FontWeight.bold),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+Future<void> submitRating(
+    String workerId, double newRating) async {
+
+  final workerRef =
+  FirebaseFirestore.instance.collection("users").doc(workerId);
+
+  final snapshot = await workerRef.get();
+
+  if (snapshot.exists) {
+
+    double currentRating =
+    (snapshot["rating"] ?? 0).toDouble();
+
+    int totalRatings =
+    (snapshot["totalRatings"] ?? 0);
+
+    double updatedRating =
+        ((currentRating * totalRatings) + newRating) /
+            (totalRatings + 1);
+
+    await workerRef.update({
+      "rating": updatedRating,
+      "totalRatings": totalRatings + 1,
+    });
+  }
+}
+
+Widget buildMazdoorCard({
+
+  required String currentUserId,
+  required String workerId,
+  required Map<String, dynamic> data,
+  required Future<void> Function({
+  required String user1Id,
+  required String user2Id,
+  }) processHireWithCommission,
+}) {
+  String audioUrl = data["audioUrl"] ?? "";
+  String name = data["name"] ?? "";
+  String work = data["workType"] ?? "";
+  String area = data["area"] ?? "";
+  String dp = data["dp"] ?? "";
+  double distance = (data["distance"] ?? 0).toDouble();
+  bool isAvailable = data["isAvailable"] ?? false;
+  double rating = (data["rating"] ?? 0.0).toDouble();
+  int totalRatings = data["totalRatings"] ?? 0;
+  String? rate = data["rate"]?.toString();
+
+
+  return Container(
+    margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(22),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.05),
+          blurRadius: 12,
+          offset: const Offset(0, 6),
+        ),
+      ],
+    ),
+    child: Column(
+      children: [
+
+        /// ===== TOP SECTION =====
+        Row(
+          children: [
+
+            Container(
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: isAvailable ? Colors.green : Colors.grey,
+                  width: 2,
+                ),
+              ),
+              child: CircleAvatar(
+                radius: 30,
+                backgroundImage:
+                dp.isNotEmpty ? NetworkImage(dp) : null,
+                child: dp.isEmpty
+                    ? Text(name.isNotEmpty ? name[0] : "")
+                    : null,
+              ),
+            ),
+
+            const SizedBox(width: 14),
+
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          name,
+                          style: const TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      Icon(Icons.circle,
+                          size: 10,
+                          color: isAvailable ? Colors.green : Colors.grey),
+                      const SizedBox(width: 4),
+                      Text(
+                        isAvailable ? "Active" : "Offline",
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isAvailable ? Colors.green : Colors.grey,
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 4),
+
+                  Text(
+                    work,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+
+        const Divider(height: 20),
+
+        /// Location + Distance
+        Row(
+          children: [
+            const Icon(Icons.location_on, size: 16, color: Colors.grey),
+            const SizedBox(width: 6),
+            Text(
+              "$area • ${distance < 1000
+                  ? "${distance.toStringAsFixed(0)} m"
+                  : "${(distance / 1000).toStringAsFixed(1)} KM"}",
+              style: const TextStyle(
+                fontSize: 13,
+                color: Colors.black54,
+              ),
+            ),
+          ],
+        ),
+
+        const Divider(height: 20),
+
+        /// Rating + Rate
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.star, size: 16, color: Colors.orange),
+                const SizedBox(width: 4),
+                Text(
+                  "${rating.toStringAsFixed(1)} ($totalRatings)",
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ],
+            ),
+            Text(
+              rate != null && rate.isNotEmpty
+                  ? "₹$rate / Day"
+                  : "Rate Negotiable",
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Colors.green,
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 16),
+
+        /// Buttons
+        Row(
+          children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: () async {
+
+                  if (audioUrl.isEmpty) {
+                    ScaffoldMessenger.of(
+                        navigatorKey.currentContext!
+                    ).showSnackBar(
+                      const SnackBar(content: Text("No intro available")),
+                    );
+                    return;
+                  }
+
+                  final player = AudioPlayer();
+                  await player.setUrl(audioUrl);
+                  player.play();
+                },
+                child: Container(
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(25),
+                  ),
+                  child: const Center(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.mic, size: 18),
+                        SizedBox(width: 6),
+                        Text("Listen Intro"),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: SizedBox(
+                height: 40,
+                child: ElevatedButton(
+                  onPressed: () async {
+                    await processHireWithCommission(
+                      user1Id: currentUserId,
+                      user2Id: workerId,
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(25),
+                    ),
+                  ),
+                  child: const Text(
+                    "Hire ₹5",
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
+}
+//================= THEKEDAR LIST =================
+
+class ThekedarListScreen extends StatefulWidget {
+  const ThekedarListScreen({super.key});
+
+  @override
+  State<ThekedarListScreen> createState() => _ThekedarListScreenState();
+}
+
+class _ThekedarListScreenState extends State<ThekedarListScreen> {
+
+  // 🔥 ₹5 + ₹5 Commission System
+  Future<void> processHireWithCommission({
+    required String user1Id,
+    required String user2Id,
+  }) async {
+
+    const int commission = 5;
+
+    await FirebaseFirestore.instance.runTransaction((transaction) async {
+
+      DocumentReference user1Ref =
+      FirebaseFirestore.instance.collection("users").doc(user1Id);
+
+      DocumentReference user2Ref =
+      FirebaseFirestore.instance.collection("users").doc(user2Id);
+
+      DocumentReference adminRef =
+      FirebaseFirestore.instance.collection("admin").doc("main");
+
+      DocumentSnapshot user1Snap = await transaction.get(user1Ref);
+      DocumentSnapshot user2Snap = await transaction.get(user2Ref);
+      DocumentSnapshot adminSnap = await transaction.get(adminRef);
+
+      int user1Wallet = user1Snap["wallet"] ?? 0;
+      int user2Wallet = user2Snap["wallet"] ?? 0;
+      int adminWallet = adminSnap["wallet"] ?? 0;
+
+      if (user1Wallet < commission ||
+          user2Wallet < commission) {
+        throw Exception("₹5 Balance Required");
+      }
+
+      // 🔻 Deduct ₹5 from both
+      transaction.update(user1Ref, {
+        "wallet": user1Wallet - commission,
+      });
+
+      transaction.update(user2Ref, {
+        "wallet": user2Wallet - commission,
+      });
+
+      // 🔺 Add ₹10 to Admin
+      transaction.update(adminRef, {
+        "wallet": adminWallet + (commission * 2),
+        "totalEarning": FieldValue.increment(commission * 2),
+      });
+
+      // 🔥 User1 Transaction
+      transaction.set(
+        user1Ref.collection("transactions").doc(),
+        {
+          "amount": commission,
+          "type": "debit",
+          "message": "Platform Fee",
+          "createdAt": Timestamp.now(),
+        },
+      );
+
+      // 🔥 User2 Transaction
+      transaction.set(
+        user2Ref.collection("transactions").doc(),
+        {
+          "amount": commission,
+          "type": "debit",
+          "message": "Platform Fee",
+          "createdAt": Timestamp.now(),
+        },
+      );
+
+      // 🔥 Admin Transaction
+      transaction.set(
+        adminRef.collection("transactions").doc(),
+        {
+          "amount": commission * 2,
+          "type": "credit",
+          "message": "Platform Commission",
+          "createdAt": Timestamp.now(),
+        },
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+
+    String currentUserId =
+        FirebaseAuth.instance.currentUser!.uid;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF2F2F2),
+
+      appBar: AppBar(
+        title: const Text("ठेकेदार लिस्ट",
+            style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.black),
+      ),
+
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection("users")
+            .where("role", isEqualTo: "ठेकेदार")
+            .snapshots(),
+        builder: (context, snapshot) {
+
+          if (snapshot.connectionState ==
+              ConnectionState.waiting) {
+            return const Center(
+                child: CircularProgressIndicator());
+          }
+
+          if (!snapshot.hasData ||
+              snapshot.data!.docs.isEmpty) {
+            return const Center(
+                child: Text("कोई ठेकेदार उपलब्ध नहीं है"));
+          }
+
+          var docs = snapshot.data!.docs;
+
+          return ListView.builder(
+            padding:
+            const EdgeInsets.symmetric(vertical: 10),
+            itemCount: docs.length,
+            itemBuilder: (context, index) {
+
+              var doc = docs[index];
+              var data =
+              doc.data() as Map<String, dynamic>;
+
+              String thekedarId = doc.id;
+
+              if (thekedarId == currentUserId) {
+                return const SizedBox();
+              }
+
+              String name = data["name"] ?? "";
+              String work = data["workType"] ?? "";
+              String area = data["area"] ?? "";
+              String dp = data["dp"] ?? "";
+
+              return Container(
+                margin: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 8),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius:
+                  BorderRadius.circular(22),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.grey
+                          .withOpacity(0.1),
+                      blurRadius: 10,
+                      offset: const Offset(0, 5),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+
+                    CircleAvatar(
+                      radius: 28,
+                      backgroundImage:
+                      dp.isNotEmpty
+                          ? NetworkImage(dp)
+                          : null,
+                      child: dp.isEmpty
+                          ? Text(
+                        name.isNotEmpty
+                            ? name[0]
+                            : "",
+                        style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight:
+                            FontWeight.bold),
+                      )
+                          : null,
+                    ),
+
+                    const SizedBox(width: 15),
+
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment:
+                        CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            name,
+                            style:
+                            const TextStyle(
+                                fontSize: 17,
+                                fontWeight:
+                                FontWeight.bold),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            work,
+                            style:
+                            const TextStyle(
+                                color:
+                                Colors.green,
+                                fontSize: 13),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            area,
+                            style:
+                            const TextStyle(
+                                color:
+                                Colors.grey,
+                                fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // 🔥 HIRE BUTTON (₹5 + ₹5)
+                    ElevatedButton(
+                      onPressed: () async {
+
+                        try {
+
+                          await processHireWithCommission(
+                            user1Id:
+                            currentUserId,
+                            user2Id:
+                            thekedarId,
+                          );
+
+                          ScaffoldMessenger.of(
+                              context)
+                              .showSnackBar(
+                            const SnackBar(
+                                content: Text(
+                                    "₹5 Platform Fee Paid")),
+                          );
+
+                        } catch (e) {
+
+                          ScaffoldMessenger.of(
+                              context)
+                              .showSnackBar(
+                            SnackBar(
+                                content:
+                                Text(e.toString())),
+                          );
+                        }
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor:
+                        Colors.green,
+                      ),
+                      child: const Text("Hire ₹5"),
+                    ),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+//==============WalletScreen================
 class WalletScreen extends StatefulWidget {
   const WalletScreen({super.key});
 
@@ -1160,452 +2752,352 @@ class WalletScreen extends StatefulWidget {
 
 class _WalletScreenState extends State<WalletScreen> {
 
-  int walletBalance = 0;
-  bool isLoading = true;
-  late Razorpay _razorpay;
-  int rechargeAmount = 0;
-
   final TextEditingController amountController = TextEditingController();
+  late Razorpay _razorpay;
 
   @override
   void initState() {
     super.initState();
-    fetchWallet();
+
     _razorpay = Razorpay();
+
     _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _handlePaymentSuccess);
     _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _handlePaymentError);
   }
 
-  @override
-  void dispose() {
-    _razorpay.clear();
-    amountController.dispose();
-    super.dispose();
-  }
-
-  Future<void> fetchWallet() async {
-    try {
-      final user = FirebaseAuth.instance.currentUser;
-
-      if (user == null) {
-        setState(() {
-          isLoading = false;
-        });
-        return;
-      }
-
-      final doc = await FirebaseFirestore.instance
-          .collection("users")
-          .doc(user.uid)
-          .get();
-
-      if (doc.exists) {
-        setState(() {
-          walletBalance = doc.data()?["wallet"] ?? 0;
-          isLoading = false;
-        });
-      } else {
-        setState(() {
-          walletBalance = 0;
-          isLoading = false;
-        });
-      }
-
-    } catch (e) {
-      setState(() {
-        isLoading = false;
-      });
-      print("Wallet Error: $e");
-    }
-  }
-
-  void openRazorpay(int amount) {
-    rechargeAmount = amount;
-
-    var options = {
-      'key': 'rzp_test_SJeW8zM6X7fQQI',
-      'amount': amount * 100,
-      'name': 'KaamDwaar Wallet',
-      'description': 'Wallet Recharge',
-    };
-
-    _razorpay.open(options);
-  }
-
   void _handlePaymentSuccess(PaymentSuccessResponse response) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
 
-    // 1️⃣ Wallet Update
+    String uid = FirebaseAuth.instance.currentUser!.uid;
+    int amount = int.tryParse(amountController.text.trim()) ?? 0;
+
     await FirebaseFirestore.instance
         .collection("users")
-        .doc(user.uid)
+        .doc(uid)
         .update({
-      "wallet": FieldValue.increment(rechargeAmount),
+      "wallet": FieldValue.increment(amount),
+      "totalEarned": FieldValue.increment(amount),
     });
 
-    // 2️⃣ Transaction Save
     await FirebaseFirestore.instance
         .collection("users")
-        .doc(user.uid)
+        .doc(uid)
         .collection("transactions")
         .add({
-      "amount": rechargeAmount,
+      "amount": amount,
       "type": "credit",
-      "paymentId": response.paymentId,
-      "status": "success",
+      "message": "Wallet Recharge",
       "createdAt": Timestamp.now(),
     });
 
-    fetchWallet();
+    amountController.clear();
 
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("₹$rechargeAmount Added Successfully")),
+      const SnackBar(content: Text("Payment Successful")),
     );
   }
 
   void _handlePaymentError(PaymentFailureResponse response) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Payment Failed ❌")),
+      const SnackBar(content: Text("Payment Failed")),
     );
+  }
+
+  void openCheckout(int amount) {
+
+    var options = {
+      'key': 'rzp_test_SJeW8zM6X7fQQI', // 🔥 apna Razorpay test key daalna
+      'amount': amount * 100,
+      'name': 'Rozgaar Peetha',
+      'description': 'Wallet Recharge',
+    };
+
+    try {
+      _razorpay.open(options);
+    } catch (e) {
+      print(e);
+    }
+  }
+
+  @override
+  void dispose() {
+    _razorpay.clear();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
 
+    String uid = FirebaseAuth.instance.currentUser!.uid;
+
     return Scaffold(
+      backgroundColor: const Color(0xFFF2F2F2),
+
       appBar: AppBar(
-        backgroundColor: Colors.green,
         title: const Text("मेरा वॉलेट"),
-      ),
-      body: isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-
-            /// 🔥 Balance Card
-            Container(
-              width: 220,
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF4CAF50), Color(0xFF2E7D32)],
-                ),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    "कुल बैलेंस",
-                    style: TextStyle(color: Colors.white70),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    "₹$walletBalance.00",
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 40),
-
-            const Text(
-              "रिचार्ज करें",
-              style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.green),
-            ),
-
-            const SizedBox(height: 20),
-
-            /// 💰 Amount Field
-            TextField(
-              controller: amountController,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(
-                hintText: "राशि डालें (जैसे 100)",
-                prefixText: "₹ ",
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(15),
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-            /// 🔥 Recharge Button
-            SizedBox(
-              width: double.infinity,
-              height: 55,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(30),
-                  ),
-                ),
-                onPressed: () {
-                  int amount = int.tryParse(amountController.text) ?? 0;
-                  if (amount < 10) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                          content: Text("कम से कम ₹10 डालें")),
-                    );
-                    return;
-                  }
-                  openRazorpay(amount);
-                },
-                child: const Text(
-                  "रिचार्ज करें",
-                  style: TextStyle(fontSize: 16),
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 40),
-
-            const Text(
-              "ट्रांजेक्शन हिस्ट्री",
-              style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.green),
-            ),
-
-            const SizedBox(height: 10),
-
-            Expanded(
-              child: StreamBuilder<QuerySnapshot>(
-                stream: FirebaseFirestore.instance
-                    .collection("users")
-                    .doc(FirebaseAuth.instance.currentUser!.uid)
-                    .collection("transactions")
-                    .orderBy("createdAt", descending: true)
-                    .snapshots(),
-                builder: (context, snapshot) {
-
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-
-                  if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                    return const Text("कोई ट्रांजेक्शन नहीं");
-                  }
-
-                  return ListView.builder(
-                    itemCount: snapshot.data!.docs.length,
-                    itemBuilder: (context, index) {
-
-                      var data = snapshot.data!.docs[index];
-
-                      return Card(
-                        child: ListTile(
-                          leading: const Icon(Icons.check_circle, color: Colors.green),
-                          title: Text("₹${data['amount']} Added"),
-                          subtitle: Text(
-                            (data['createdAt'] as Timestamp)
-                                .toDate()
-                                .toString(),
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-// ===== MazdoorListScreen =====
-
-class MazdoorListScreen extends StatefulWidget {
-  const MazdoorListScreen({super.key});
-
-  @override
-  State<MazdoorListScreen> createState() => _MazdoorListScreenState();
-}
-
-class _MazdoorListScreenState extends State<MazdoorListScreen> {
-
-  List<QueryDocumentSnapshot> nearbyMazdoor = [];
-  bool isLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    fetchNearbyMazdoor();
-  }
-
-  Future<Position> getCurrentLocation() async {
-    LocationPermission permission = await Geolocator.checkPermission();
-
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-
-    return await Geolocator.getCurrentPosition(
-      desiredAccuracy: LocationAccuracy.high,
-    );
-  }
-
-  Future<void> fetchNearbyMazdoor() async {
-
-    Position myPosition = await getCurrentLocation();
-
-    final snapshot = await FirebaseFirestore.instance
-        .collection("users")
-        .where("role", isEqualTo: "मज़दूर")
-        .get();
-
-    List<QueryDocumentSnapshot> filtered = [];
-
-    for (var doc in snapshot.docs) {
-
-      double lat = doc["latitude"];
-      double lng = doc["longitude"];
-
-      double distanceInMeters = Geolocator.distanceBetween(
-        myPosition.latitude,
-        myPosition.longitude,
-        lat,
-        lng,
-      );
-
-      double distanceInKm = distanceInMeters / 1000;
-
-      if (distanceInKm <= 3) {
-        filtered.add(doc);
-      }
-    }
-
-    setState(() {
-      nearbyMazdoor = filtered;
-      isLoading = false;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("3KM के अंदर मज़दूर"),
         backgroundColor: Colors.green,
       ),
-      body: isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : nearbyMazdoor.isEmpty
-          ? const Center(child: Text("कोई मज़दूर पास में नहीं मिला"))
-          : ListView.builder(
-        itemCount: nearbyMazdoor.length,
-        itemBuilder: (context, index) {
 
-          var data = nearbyMazdoor[index];
-
-          return Card(
-            margin: const EdgeInsets.all(10),
-            child: ListTile(
-              leading: CircleAvatar(
-                backgroundImage: data["dp"] != ""
-                    ? NetworkImage(data["dp"])
-                    : null,
-                child: data["dp"] == ""
-                    ? const Icon(Icons.person)
-                    : null,
-              ),
-              title: Text(data["name"]),
-              subtitle: Text(data["workType"]),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-// ===== ThekedaarListScreen =====
-
-class ThekedaarListScreen extends StatelessWidget {
-  const ThekedaarListScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("ठेकेदार लिस्ट"),
-        backgroundColor: Colors.green,
-      ),
-      body: StreamBuilder<QuerySnapshot>(
+      body: StreamBuilder<DocumentSnapshot>(
         stream: FirebaseFirestore.instance
             .collection("users")
-            .where("role", isEqualTo: "ठेकेदार")
+            .doc(uid)
             .snapshots(),
-        builder: (context, snapshot) {
+        builder: (context, userSnapshot) {
 
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          if (!userSnapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
 
-          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-            return const Center(
-              child: Text("कोई ठेकेदार उपलब्ध नहीं"),
-            );
-          }
+          var userData =
+          userSnapshot.data!.data() as Map<String, dynamic>;
 
-          final thekedaarList = snapshot.data!.docs;
+          int wallet = userData["wallet"] ?? 0;
 
-          return ListView.builder(
-            itemCount: thekedaarList.length,
-            itemBuilder: (context, index) {
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
 
-              final data = thekedaarList[index];
-
-              return Card(
-                margin: const EdgeInsets.all(10),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(15),
-                ),
-                child: ListTile(
-                  leading: CircleAvatar(
-                    radius: 25,
-                    backgroundImage: data["dp"] != ""
-                        ? NetworkImage(data["dp"])
-                        : null,
-                    child: data["dp"] == ""
-                        ? const Icon(Icons.person)
-                        : null,
+                // 💰 BALANCE CARD
+                Container(
+                  width: 220,
+                  padding: const EdgeInsets.all(25),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF43A047), Color(0xFF66BB6A)],
+                    ),
+                    borderRadius: BorderRadius.circular(20),
                   ),
-                  title: Text(
-                    data["name"] ?? "",
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold),
-                  ),
-                  subtitle: Column(
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(data["workType"] ?? ""),
-                      Text(data["area"] ?? ""),
+                      const Text(
+                        "कुल बैलेंस",
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        "₹${wallet.toStringAsFixed(2)}",
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 32,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                     ],
                   ),
-                  isThreeLine: true,
                 ),
-              );
-            },
+
+                const SizedBox(height: 40),
+
+                const Text(
+                  "रिचार्ज करें",
+                  style: TextStyle(
+                    color: Colors.green,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+
+                const SizedBox(height: 15),
+
+                // 💵 Amount Input
+                TextField(
+                  controller: amountController,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    prefixIcon: const Icon(Icons.currency_rupee),
+                    hintText: "राशि डालें (जैसे 100)",
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+
+                // 🔋 Recharge Button
+                SizedBox(
+                  width: double.infinity,
+                  height: 55,
+                  child: ElevatedButton(
+                    onPressed: () {
+
+                      int amount =
+                          int.tryParse(amountController.text.trim()) ?? 0;
+
+                      if (amount <= 0) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                              content: Text("सही राशि डालें")),
+                        );
+                        return;
+                      }
+
+                      openCheckout(amount);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30),
+                      ),
+                    ),
+                    child: const Text(
+                      "रिचार्ज करें",
+                      style: TextStyle(fontSize: 18),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 40),
+
+                const Text(
+                  "ट्रांजेक्शन हिस्ट्री",
+                  style: TextStyle(
+                    color: Colors.green,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+
+                const SizedBox(height: 10),
+
+                StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection("users")
+                      .doc(uid)
+                      .collection("transactions")
+                      .orderBy("createdAt", descending: true)
+                      .snapshots(),
+                  builder: (context, snapshot) {
+
+                    if (!snapshot.hasData ||
+                        snapshot.data!.docs.isEmpty) {
+                      return const Text(
+                        "कोई ट्रांजेक्शन नहीं",
+                        style: TextStyle(color: Colors.grey),
+                      );
+                    }
+
+                    return ListView.builder(
+                      shrinkWrap: true,
+                      physics:
+                      const NeverScrollableScrollPhysics(),
+                      itemCount: snapshot.data!.docs.length,
+                      itemBuilder: (context, index) {
+
+                        var data =
+                        snapshot.data!.docs[index];
+
+                        int amount = data["amount"];
+                        String type = data["type"];
+                        String message = data["message"];
+
+                        bool isCredit =
+                            type == "credit";
+
+                        return ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: isCredit
+                                ? Colors.green
+                                : Colors.red,
+                            child: Icon(
+                              isCredit
+                                  ? Icons.arrow_upward
+                                  : Icons.arrow_downward,
+                              color: Colors.white,
+                            ),
+                          ),
+                          title: Text(message),
+                          trailing: Text(
+                            "${isCredit ? "+" : "-"}₹$amount",
+                            style: TextStyle(
+                              color: isCredit
+                                  ? Colors.green
+                                  : Colors.red,
+                              fontWeight:
+                              FontWeight.bold,
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ],
+            ),
           );
         },
       ),
     );
   }
+}
+Future<void> hireWorker({
+  required String contractorId,
+  required String workerId,
+  required int amount,
+}) async {
+
+  FirebaseFirestore.instance.runTransaction((transaction) async {
+
+    DocumentReference contractorRef =
+    FirebaseFirestore.instance.collection("users").doc(contractorId);
+
+    DocumentReference workerRef =
+    FirebaseFirestore.instance.collection("users").doc(workerId);
+
+    DocumentSnapshot contractorSnap =
+    await transaction.get(contractorRef);
+
+    DocumentSnapshot workerSnap =
+    await transaction.get(workerRef);
+
+    int contractorWallet =
+        contractorSnap["wallet"] ?? 0;
+
+    if (contractorWallet < amount) {
+      throw Exception("Insufficient Balance");
+    }
+
+    // 🔻 Deduct from Contractor
+    transaction.update(contractorRef, {
+      "wallet": contractorWallet - amount,
+    });
+
+    // 🔺 Add to Worker
+    int workerWallet =
+        workerSnap["wallet"] ?? 0;
+
+    transaction.update(workerRef, {
+      "wallet": workerWallet + amount,
+    });
+
+    // 🔥 Contractor Transaction
+    transaction.set(
+      contractorRef.collection("transactions").doc(),
+      {
+        "amount": amount,
+        "type": "debit",
+        "message": "Worker Hire Payment",
+        "createdAt": Timestamp.now(),
+      },
+    );
+
+    // 🔥 Worker Transaction
+    transaction.set(
+      workerRef.collection("transactions").doc(),
+      {
+        "amount": amount,
+        "type": "credit",
+        "message": "Job Payment Received",
+        "createdAt": Timestamp.now(),
+      },
+    );
+  });
 }
