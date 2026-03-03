@@ -19,15 +19,47 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:async';
+
+
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
 }
 
+// 🔥 YAHAN ADD KARO
+void setupFCMListeners() {
+
+  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+
+    ScaffoldMessenger.of(
+        navigatorKey.currentContext!)
+        .showSnackBar(
+      SnackBar(
+        content: Text(
+          message.notification?.title ?? "New Notification",
+        ),
+      ),
+    );
+
+  });
+
+  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+
+    navigatorKey.currentState?.push(
+      MaterialPageRoute(
+        builder: (_) => const IncomingRequestsScreen(),
+      ),
+    );
+
+  });
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+
+  setupFCMListeners(); // 🔥 Ye call rehna chahiye
 
   FirebaseMessaging.onBackgroundMessage(
       _firebaseMessagingBackgroundHandler);
@@ -991,6 +1023,12 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+
+  // 🔥 TIMER VARIABLES ADD KARO
+  Timer? requestTimer;
+  int remainingSeconds = 30;
+  bool isDialogOpen = false;
+
   // Variables jo data store karenge
   String name = "Loading...";
   String dp = "";
@@ -998,13 +1036,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int wallet = 0;
   bool isAvailable = true;
 
-
   @override
   void initState() {
     super.initState();
     getUserData();
+    saveFCMToken();
+    listenIncomingRequests();
+    listenReceiverPayment();// 🔥 ADD THIS
   }
 
+  void listenIncomingRequests() {
+
+    String uid = FirebaseAuth.instance.currentUser!.uid;
+
+    FirebaseFirestore.instance
+        .collection("hireRequests")
+        .where("receiverId", isEqualTo: uid)
+        .where("status", isEqualTo: "pending")
+        .snapshots()
+        .listen((snapshot) {
+
+      if (snapshot.docs.isNotEmpty && !isDialogOpen) {
+
+        String requestId = snapshot.docs.first.id;
+
+        showHireDialog(requestId);
+      }
+    });
+  }
 
 
   Widget _buildHorizontalMajdoorCard(
@@ -1154,6 +1213,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
     );
   }
+
+  Future<void> saveFCMToken() async {
+
+    String? token =
+    await FirebaseMessaging.instance.getToken();
+
+    if (token != null) {
+      await FirebaseFirestore.instance
+          .collection("users")
+          .doc(FirebaseAuth.instance.currentUser!.uid)
+          .update({
+        "fcmToken": token,
+      });
+    }
+  }
   // DATA FETCH KARNE KA FUNCTION
   void getUserData() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -1165,15 +1239,419 @@ class _DashboardScreenState extends State<DashboardScreen> {
           dp = doc.data()?['dp'] ?? "";
           area = doc.data()?['area'] ?? "";
           wallet = doc.data()?['wallet'] ?? 0;
+          isAvailable = doc.data()?['isAvailable'] ?? true;
         });
       }
     }
   }
+  void showHireDialog(String requestId) {
+
+    isDialogOpen = true;
+    remainingSeconds = 30;
+    requestTimer?.cancel();
+
+    showGeneralDialog(
+      context: navigatorKey.currentContext!,
+      barrierDismissible: false,
+      barrierLabel: "HireRequest",
+      barrierColor: Colors.black.withOpacity(0.6),
+      transitionDuration: const Duration(milliseconds: 300),
+      pageBuilder: (context, animation, secondaryAnimation) {
+
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+
+            requestTimer ??= Timer.periodic(
+              const Duration(seconds: 1),
+                  (timer) async {
+
+                if (remainingSeconds <= 0) {
+
+                  timer.cancel();
+                  requestTimer = null;
+
+                  await FirebaseFirestore.instance
+                      .collection("hireRequests")
+                      .doc(requestId)
+                      .update({"status": "expired"});
+
+                  Navigator.pop(context);
+                  isDialogOpen = false;
+
+                } else {
+                  setStateDialog(() {
+                    remainingSeconds--;
+                  });
+                }
+              },
+            );
+
+            return Center(
+              child: Material(
+                color: Colors.transparent,
+                child: Container(
+                  width: MediaQuery.of(context).size.width * 0.9,
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(30),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.15),
+                        blurRadius: 20,
+                        offset: const Offset(0, 10),
+                      )
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+
+                      // ⏰ Time Badge
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade200,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          TimeOfDay.now().format(context),
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
+
+                      const SizedBox(height: 15),
+
+                      const Text(
+                        "New Hire Request",
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+
+                      const SizedBox(height: 6),
+
+                      const Text(
+                        "₹5 देकर कनेक्शन स्वीकार करें",
+                        style: TextStyle(
+                          fontSize: 15,
+                          color: Colors.black54,
+                        ),
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      // 🔥 Circular Timer
+                      Stack(
+                        alignment: Alignment.center,
+                        children: [
+
+                          SizedBox(
+                            height: 120,
+                            width: 120,
+                            child: CircularProgressIndicator(
+                              value: remainingSeconds / 30,
+                              strokeWidth: 8,
+                              backgroundColor: Colors.orange.shade100,
+                              valueColor: const AlwaysStoppedAnimation(
+                                  Colors.orange),
+                            ),
+                          ),
+
+                          Text(
+                            "00:${remainingSeconds.toString().padLeft(2, '0')}",
+                            style: const TextStyle(
+                              fontSize: 26,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      const SizedBox(height: 25),
+
+                      Row(
+                        children: [
+
+                          // ❌ Reject
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () async {
+
+                                // 🔥 Stop 30 sec timer
+                                requestTimer?.cancel();
+                                requestTimer = null;
+
+                                try {
+
+                                  // 🔥 Update status to payment_pending
+                                  await FirebaseFirestore.instance
+                                      .collection("hireRequests")
+                                      .doc(requestId)
+                                      .update({
+                                    "status": "payment_pending",
+                                    "paymentPendingBy": "receiver",
+                                    "paymentDeadline": Timestamp.fromDate(
+                                      DateTime.now().add(const Duration(minutes: 10)),
+                                    ),
+                                  });
+
+                                  // 🔥 Close 30 sec dialog
+                                  Navigator.of(context).pop();
+
+                                  // 🔥 VERY IMPORTANT: reset flag
+                                  isDialogOpen = false;
+
+                                  // 🔥 Small delay to avoid context conflict
+                                  await Future.delayed(const Duration(milliseconds: 200));
+
+                                  // 🔥 Open payment dialog immediately
+                                  showReceiverPaymentDialog(requestId);
+
+                                } catch (e) {
+
+                                  isDialogOpen = false;
+
+                                  ScaffoldMessenger.of(
+                                    navigatorKey.currentContext!,
+                                  ).showSnackBar(
+                                    SnackBar(content: Text("Error: $e")),
+                                  );
+                                }
+                              },
+                              icon: const Icon(Icons.check),
+                              label: const Text("Accept"),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green,
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                ),
+                              ),
+                            ),
+                          ),
+
+                          const SizedBox(width: 15),
+
+                          // ✅ Accept
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () async {
+
+                                // 🔥 Stop 30 sec timer
+                                requestTimer?.cancel();
+                                requestTimer = null;
+
+                                try {
+
+                                  // 🔥 Update request status
+                                  await FirebaseFirestore.instance
+                                      .collection("hireRequests")
+                                      .doc(requestId)
+                                      .update({
+                                    "status": "payment_pending",
+                                    "paymentPendingBy": "receiver",
+                                    "paymentDeadline": Timestamp.fromDate(
+                                      DateTime.now().add(const Duration(minutes: 10)),
+                                    ),
+                                  });
+
+                                  // 🔥 Close 30 sec dialog
+                                  Navigator.of(context).pop();
+
+                                  // 🔥 Reset flag
+                                  isDialogOpen = false;
+
+                                  // 🔥 Small delay
+                                  await Future.delayed(const Duration(milliseconds: 200));
+
+                                  // 🔥 OPEN PAYMENT DIALOG
+                                  showReceiverPaymentDialog(requestId);
+
+                                } catch (e) {
+                                  isDialogOpen = false;
+                                  ScaffoldMessenger.of(navigatorKey.currentContext!)
+                                      .showSnackBar(
+                                    SnackBar(content: Text("Error: $e")),
+                                  );
+                                }
+
+                              },
+                              icon: const Icon(Icons.check),
+                              label: const Text("Accept"),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green,
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void showReceiverPaymentDialog(String requestId) {
+
+    // 🔥 VERY IMPORTANT
+    isDialogOpen = true;
+
+    showDialog(
+      context: navigatorKey.currentContext!,
+      barrierDismissible: false,
+      builder: (context) {
+
+        return AlertDialog(
+          title: const Text("Complete Payment"),
+          content: const Text("10 मिनट के अंदर ₹5 भुगतान करें"),
+          actions: [
+
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                isDialogOpen = false;   // 🔥 reset
+              },
+              child: const Text("Later"),
+            ),
+
+            ElevatedButton(
+              onPressed: () async {
+
+                try {
+
+                  String currentUserId =
+                      FirebaseAuth.instance.currentUser!.uid;
+
+                  DocumentSnapshot snap =
+                  await FirebaseFirestore.instance
+                      .collection("hireRequests")
+                      .doc(requestId)
+                      .get();
+
+                  // 🔥 SAFE CHECK
+                  if (!snap.exists) {
+                    throw Exception("Request not found");
+                  }
+
+                  // 🔥 Deduct ₹5 from receiver only
+                  await FirebaseFirestore.instance
+                      .runTransaction((transaction) async {
+
+                    DocumentReference receiverRef =
+                    FirebaseFirestore.instance
+                        .collection("users")
+                        .doc(currentUserId);
+
+                    DocumentReference adminRef =
+                    FirebaseFirestore.instance
+                        .collection("admin")
+                        .doc("main");
+
+                    DocumentSnapshot receiverSnap =
+                    await transaction.get(receiverRef);
+
+                    DocumentSnapshot adminSnap =
+                    await transaction.get(adminRef);
+
+                    int receiverWallet =
+                        (receiverSnap.data() as Map)["wallet"] ?? 0;
+
+                    int adminWallet =
+                        (adminSnap.data() as Map)["wallet"] ?? 0;
+
+                    if (receiverWallet < 5) {
+                      throw Exception("₹5 Balance Required");
+                    }
+
+                    transaction.update(receiverRef, {
+                      "wallet": receiverWallet - 5,
+                    });
+
+                    transaction.update(adminRef, {
+                      "wallet": adminWallet + 5,
+                      "totalEarning": FieldValue.increment(5),
+                    });
+                  });
+
+                  // 🔥 Update request status
+                  await FirebaseFirestore.instance
+                      .collection("hireRequests")
+                      .doc(requestId)
+                      .update({
+                    "receiverPaid": true,
+                    "status": "completed"
+                  });
+
+                  Navigator.pop(context);
+                  isDialogOpen = false;
+
+                  ScaffoldMessenger.of(
+                      navigatorKey.currentContext!)
+                      .showSnackBar(
+                    const SnackBar(
+                        content: Text("Payment Successful")),
+                  );
+
+                } catch (e) {
+
+                  isDialogOpen = false;
+
+                  ScaffoldMessenger.of(
+                      navigatorKey.currentContext!)
+                      .showSnackBar(
+                    SnackBar(content: Text(e.toString())),
+                  );
+                }
+              },
+              child: const Text("Pay ₹5 Now"),
+            ),
+          ],
+        );
+      },
+    );
+  }
+  void listenReceiverPayment() {
+
+    String uid = FirebaseAuth.instance.currentUser!.uid;
+
+    FirebaseFirestore.instance
+        .collection("hireRequests")
+        .where("receiverId", isEqualTo: uid)
+        .where("status", isEqualTo: "payment_pending")
+        .snapshots()
+        .listen((snapshot) {
+
+      if (snapshot.docs.isNotEmpty) {
+
+        String requestId = snapshot.docs.first.id;
+
+        if (!isDialogOpen) {
+
+          isDialogOpen = true;
+
+          showReceiverPaymentDialog(requestId);
+        }
+      }
+    });
+  }
+
 
   // ================= NEARBY JOBS METHOD =================
   Widget _buildNearbyJobs() {
-    return FutureBuilder<List<Map<String, dynamic>>>(
-      future: _getNearbyJobs(),
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: _getNearbyJobsStream(),
       builder: (context, snapshot) {
 
         if (snapshot.connectionState == ConnectionState.waiting) {
@@ -1259,59 +1737,63 @@ class _DashboardScreenState extends State<DashboardScreen> {
       });
     });
   }
-  Future<List<Map<String, dynamic>>> _getNearbyJobs() async {
+  Stream<List<Map<String, dynamic>>> _getNearbyJobsStream() async* {
 
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return [];
+    if (user == null) {
+      yield [];
+      return;
+    }
 
     var userDoc = await FirebaseFirestore.instance
         .collection("users")
         .doc(user.uid)
         .get();
 
-    if (!userDoc.exists) return [];
+    if (!userDoc.exists) {
+      yield [];
+      return;
+    }
 
     double userLat = (userDoc.data()?["latitude"] ?? 0).toDouble();
     double userLng = (userDoc.data()?["longitude"] ?? 0).toDouble();
 
-    var snapshot = await FirebaseFirestore.instance
+    yield* FirebaseFirestore.instance
         .collection("users")
         .where(
       "role",
       isEqualTo: widget.role == "मज़दूर" ? "ठेकेदार" : "मज़दूर",
     )
-        .where("isAvailable", isEqualTo: true) // 🔥 important
-        .get();
+        .where("isAvailable", isEqualTo: true)
+        .snapshots()
+        .asyncMap((snapshot) async {
 
-    List<Map<String, dynamic>> nearbyWorkers = [];
+      List<Map<String, dynamic>> nearbyWorkers = [];
 
+      for (var doc in snapshot.docs) {
 
+        if (doc.id == user.uid) continue;
 
-    for (var doc in snapshot.docs) {
+        var data = doc.data();
 
-      // 🔥 apne aap ko skip karo
-      if (doc.id == user.uid) continue;
+        double workerLat = (data["latitude"] ?? 0).toDouble();
+        double workerLng = (data["longitude"] ?? 0).toDouble();
 
-      var data = doc.data();
+        double distance = Geolocator.distanceBetween(
+            userLat, userLng, workerLat, workerLng);
 
-      double workerLat = (data["latitude"] ?? 0).toDouble();
-      double workerLng = (data["longitude"] ?? 0).toDouble();
+        data["distance"] = distance;
+        data["id"] = doc.id;
 
-      double distance = Geolocator.distanceBetween(
-          userLat, userLng, workerLat, workerLng);
+        nearbyWorkers.add(data);
+      }
 
-      // 🔥 5 KM radius
-      data["distance"] = distance;
-      data["id"] = doc.id; // 🔥 document id add karo
-      nearbyWorkers.add(data);
-    }
+      nearbyWorkers.sort(
+            (a, b) => a["distance"].compareTo(b["distance"]),
+      );
 
-    // distance wise sort
-    nearbyWorkers.sort(
-          (a, b) => a["distance"].compareTo(b["distance"]),
-    );
-
-    return nearbyWorkers;
+      return nearbyWorkers;
+    });
   }
   @override
   Widget build(BuildContext context) {
@@ -1346,8 +1828,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
 
               // ================= NAV BUTTONS =================
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
                 children: [
                   _smallNavButton(Icons.people_alt, "मजदूर लिस्ट", Colors.blue, () {
                     Navigator.push(context, MaterialPageRoute(builder: (context) => MajdoorListScreen()));
@@ -1355,8 +1838,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   _smallNavButton(Icons.business, "ठेकेदार लिस्ट", Colors.purple, () {
                     Navigator.push(context, MaterialPageRoute(builder: (context) => ThekedarListScreen()));
                   }),
-                  _smallNavButton(Icons.chat_bubble, "चैट", Colors.deepPurple, () {
-                    // Chat ke liye code yahan aayega
+
+                  _smallNavButton(Icons.notifications, "Requests", Colors.orange, () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const IncomingRequestsScreen(),
+                      ),
+                    );
                   }),
                 ],
               ),
@@ -1886,6 +2375,7 @@ class _MajdoorListScreenState extends State<MajdoorListScreen> {
         stream: FirebaseFirestore.instance
             .collection("users")
             .where("role", isEqualTo: "मज़दूर")
+            .where("isAvailable", isEqualTo: true) // 🔥 ADD THIS
             .snapshots(),
         builder: (context, snapshot) {
 
@@ -2238,6 +2728,46 @@ Future<void> submitRating(
   }
 }
 
+Future<void> sendHireRequest({
+  required String senderId,
+  required String receiverId,
+}) async {
+
+  const int fee = 5;
+
+  await FirebaseFirestore.instance.runTransaction((transaction) async {
+
+    DocumentReference senderRef =
+    FirebaseFirestore.instance.collection("users").doc(senderId);
+
+    DocumentReference requestRef =
+    FirebaseFirestore.instance.collection("hireRequests").doc();
+
+    DocumentSnapshot senderSnap = await transaction.get(senderRef);
+
+    int wallet = senderSnap["wallet"] ?? 0;
+
+    if (wallet < fee) {
+      throw Exception("₹5 Balance Required");
+    }
+
+    // 🔻 Deduct ₹5 from sender
+    transaction.update(senderRef, {
+      "wallet": wallet - fee,
+    });
+
+    // 🔥 Create Hire Request
+    transaction.set(requestRef, {
+      "senderId": senderId,
+      "receiverId": receiverId,
+      "senderPaid": true,
+      "receiverPaid": false,
+      "status": "pending",
+      "createdAt": Timestamp.now(),
+    });
+  });
+}
+
 Widget buildMazdoorCard({
 
   required String currentUserId,
@@ -2442,10 +2972,27 @@ Widget buildMazdoorCard({
                 height: 40,
                 child: ElevatedButton(
                   onPressed: () async {
-                    await processHireWithCommission(
-                      user1Id: currentUserId,
-                      user2Id: workerId,
-                    );
+                    try {
+                      await sendHireRequest(
+                        senderId: currentUserId,
+                        receiverId: workerId,
+                      );
+
+                      ScaffoldMessenger.of(
+                          navigatorKey.currentContext!)
+                          .showSnackBar(
+                        const SnackBar(
+                            content: Text("Request Sent Successfully")),
+                      );
+
+                    } catch (e) {
+
+                      ScaffoldMessenger.of(
+                          navigatorKey.currentContext!)
+                          .showSnackBar(
+                        SnackBar(content: Text(e.toString())),
+                      );
+                    }
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.green,
@@ -2580,6 +3127,7 @@ class _ThekedarListScreenState extends State<ThekedarListScreen> {
         stream: FirebaseFirestore.instance
             .collection("users")
             .where("role", isEqualTo: "ठेकेदार")
+            .where("isAvailable", isEqualTo: true) // 🔥 ADD THIS
             .snapshots(),
         builder: (context, snapshot) {
 
@@ -2618,122 +3166,11 @@ class _ThekedarListScreenState extends State<ThekedarListScreen> {
               String area = data["area"] ?? "";
               String dp = data["dp"] ?? "";
 
-              return Container(
-                margin: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 8),
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius:
-                  BorderRadius.circular(22),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.grey
-                          .withOpacity(0.1),
-                      blurRadius: 10,
-                      offset: const Offset(0, 5),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-
-                    CircleAvatar(
-                      radius: 28,
-                      backgroundImage:
-                      dp.isNotEmpty
-                          ? NetworkImage(dp)
-                          : null,
-                      child: dp.isEmpty
-                          ? Text(
-                        name.isNotEmpty
-                            ? name[0]
-                            : "",
-                        style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight:
-                            FontWeight.bold),
-                      )
-                          : null,
-                    ),
-
-                    const SizedBox(width: 15),
-
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment:
-                        CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            name,
-                            style:
-                            const TextStyle(
-                                fontSize: 17,
-                                fontWeight:
-                                FontWeight.bold),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            work,
-                            style:
-                            const TextStyle(
-                                color:
-                                Colors.green,
-                                fontSize: 13),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            area,
-                            style:
-                            const TextStyle(
-                                color:
-                                Colors.grey,
-                                fontSize: 12),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    // 🔥 HIRE BUTTON (₹5 + ₹5)
-                    ElevatedButton(
-                      onPressed: () async {
-
-                        try {
-
-                          await processHireWithCommission(
-                            user1Id:
-                            currentUserId,
-                            user2Id:
-                            thekedarId,
-                          );
-
-                          ScaffoldMessenger.of(
-                              context)
-                              .showSnackBar(
-                            const SnackBar(
-                                content: Text(
-                                    "₹5 Platform Fee Paid")),
-                          );
-
-                        } catch (e) {
-
-                          ScaffoldMessenger.of(
-                              context)
-                              .showSnackBar(
-                            SnackBar(
-                                content:
-                                Text(e.toString())),
-                          );
-                        }
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor:
-                        Colors.green,
-                      ),
-                      child: const Text("Hire ₹5"),
-                    ),
-                  ],
-                ),
+              return buildMazdoorCard(
+                currentUserId: currentUserId,
+                workerId: thekedarId,
+                data: data,
+                processHireWithCommission: processHireWithCommission,
               );
             },
           );
@@ -3100,4 +3537,71 @@ Future<void> hireWorker({
       },
     );
   });
+}
+
+class IncomingRequestsScreen extends StatelessWidget {
+  const IncomingRequestsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+
+    String currentUserId =
+        FirebaseAuth.instance.currentUser!.uid;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("Incoming Requests"),
+        backgroundColor: Colors.green,
+      ),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection("hireRequests")
+            .where("receiverId", isEqualTo: currentUserId)
+            .where("status", isEqualTo: "pending")
+            .snapshots(),
+        builder: (context, snapshot) {
+
+          if (!snapshot.hasData ||
+              snapshot.data!.docs.isEmpty) {
+            return const Center(
+              child: Text("No Incoming Requests"),
+            );
+          }
+
+          var docs = snapshot.data!.docs;
+
+          return ListView.builder(
+            itemCount: docs.length,
+            itemBuilder: (context, index) {
+
+              var request = docs[index];
+
+              return ListTile(
+                title: Text("New Hire Request"),
+                subtitle: Text("Tap to Accept"),
+                trailing: ElevatedButton(
+                  onPressed: () async {
+
+                    await FirebaseFirestore.instance
+                        .collection("hireRequests")
+                        .doc(request.id)
+                        .update({
+                      "status": "accepted"
+                    });
+
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(
+                      const SnackBar(
+                          content: Text("Accepted")),
+                    );
+                  },
+                  child: const Text("Accept"),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
 }
