@@ -1,0 +1,29 @@
+ {
+  "project_info": {
+    "project_number": "483670150208",
+    "project_id": "kaamdwaar-b73c8",
+    "storage_bucket": "kaamdwaar-b73c8.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:483670150208:android:c7dd5c25502897b60aa3a5",
+        "android_client_info": {
+          "package_name": "com.mukesh.kaamdwaar"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDJrEOSOOlp32M2JBOo8ne1GZRbl-eFP2Q"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
