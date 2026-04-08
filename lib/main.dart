@@ -9,7 +9,7 @@
   import 'package:cloud_firestore/cloud_firestore.dart';
   import 'package:permission_handler/permission_handler.dart';
   import 'package:geolocator/geolocator.dart';
-  import 'package:razorpay_flutter/razorpay_flutter.dart';
+
   import 'package:http/http.dart' as http;
   import 'dart:convert';
   import 'package:firebase_messaging/firebase_messaging.dart';
@@ -20,43 +20,74 @@
   import 'package:kaamdwaar/worker_detail_screen.dart';
   import 'worker_detail_screen.dart';
   import 'services/hire_listener.dart';
+  import 'package:flutter_localizations/flutter_localizations.dart';
+  import 'package:geocoding/geocoding.dart';
+  import 'admin_dashboard_screen.dart';
 
 
 
+  Future<String> getAreaName(double lat, double lng) async {
+    try {
+      List<Placemark> placemarks =
+      await placemarkFromCoordinates(lat, lng);
 
+      Placemark place = placemarks[0];
+
+      String area =
+          place.subLocality ??
+              place.locality ??
+              place.subAdministrativeArea ??
+              place.administrativeArea ??
+              "Unknown";
+
+      return area;
+
+    } catch (e) {
+      print("Area detect error: $e");
+      return "Unknown";
+    }
+  }
+
+  String t(BuildContext context, String en, String hi) {
+    return Localizations.localeOf(context).languageCode == 'hi'
+        ? hi
+        : en;
+  }
 
 
   final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
-  
+
   Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     await Firebase.initializeApp();
   }
-  
+
   // 🔥 YAHAN ADD KARO
   void setupFCMListeners() {
-  
+
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-  
-      ScaffoldMessenger.of(
-          navigatorKey.currentContext!)
-          .showSnackBar(
-        SnackBar(
-          content: Text(
-            message.notification?.title ?? "New Notification",
+
+      final ctx = navigatorKey.currentContext;
+
+      if (ctx != null) {
+        ScaffoldMessenger.of(ctx).showSnackBar(
+          SnackBar(
+            content: Text(
+              message.notification?.title ?? "New Notification",
+            ),
           ),
-        ),
-      );
-  
+        );
+      }
+
     });
-  
+
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-  
+
       navigatorKey.currentState?.push(
         MaterialPageRoute(
           builder: (_) => const IncomingRequestsScreen(),
         ),
       );
-  
+
     });
   }
 
@@ -77,18 +108,72 @@
   }
 
 
-  class MyApp extends StatelessWidget {
 
+
+  class MyApp extends StatefulWidget {
     final RemoteMessage? initialMessage;
 
     const MyApp({super.key, this.initialMessage});
-  
+
+    // 🔥 GLOBAL ACCESS (VERY IMPORTANT)
+    static _MyAppState? of(BuildContext context) =>
+        context.findAncestorStateOfType<_MyAppState>();
+
+    @override
+    State<MyApp> createState() => _MyAppState();
+  }
+
+  class _MyAppState extends State<MyApp> {
+
+    Locale _locale = const Locale('en');
+
+    @override
+    void initState() {
+      super.initState();
+      loadSavedLanguage(); // 🔥 load on start
+    }
+
+    // 🔥 CHANGE LANGUAGE
+    void changeLanguage(String langCode) async {
+      setState(() {
+        _locale = Locale(langCode);
+      });
+
+      // 🔥 SAVE LANGUAGE
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString("app_lang", langCode);
+    }
+
+    // 🔥 LOAD SAVED LANGUAGE
+    Future<void> loadSavedLanguage() async {
+      final prefs = await SharedPreferences.getInstance();
+      String lang = prefs.getString("app_lang") ?? "en";
+
+      setState(() {
+        _locale = Locale(lang);
+      });
+    }
+
     @override
     Widget build(BuildContext context) {
       return MaterialApp(
         navigatorKey: navigatorKey,
         debugShowCheckedModeBanner: false,
-        home: AuthCheckScreen(initialMessage: initialMessage),
+
+        locale: _locale,
+
+        supportedLocales: const [
+          Locale('en'),
+          Locale('hi'),
+        ],
+
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+
+        home: AuthCheckScreen(initialMessage: widget.initialMessage),
       );
     }
   }
@@ -178,32 +263,32 @@
       );
     }
   }
-  
+
   class SplashScreen extends StatefulWidget {
     const SplashScreen({super.key});
-  
+
     @override
     State<SplashScreen> createState() => _SplashScreenState();
   }
-  
+
   class _SplashScreenState extends State<SplashScreen> {
-  
+
     @override
     void initState() {
       super.initState();
-  
+
       Timer(const Duration(seconds: 2), () {
-  
+
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
             builder: (context) => const AuthCheckScreen(),
           ),
         );
-  
+
       });
     }
-  
+
     @override
     Widget build(BuildContext context) {
       return Scaffold(
@@ -217,21 +302,21 @@
       );
     }
   }
-  
-  
+
+
   // ===== LOGIN SCREEN (LOGO + SINGLE LOGIN BUTTON) =====
-  
+
   // ===== LOGIN SCREEN =====
-  
+
   class LoginScreen extends StatefulWidget {
     const LoginScreen({super.key});
-  
+
     @override
     State<LoginScreen> createState() => _LoginScreenState();
   }
-  
+
   class _LoginScreenState extends State<LoginScreen> {
-  
+
     final TextEditingController phoneController = TextEditingController();
 
     @override
@@ -256,8 +341,10 @@
 
                   const SizedBox(height: 15),
 
-                  const Text(
-                    "Welcome to KaamDwaar",
+                  Text(
+                    Localizations.localeOf(context).languageCode == 'hi'
+                        ? "रोजगार पीठा में आपका स्वागत है"
+                        : "Welcome to Rozgaar Peetha",
                     style: TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.bold,
@@ -271,7 +358,7 @@
                     keyboardType: TextInputType.phone,
                     decoration: InputDecoration(
                       prefixText: "+91 ",
-                      hintText: "Enter mobile number",
+                      hintText: t(context, "Enter mobile number", "मोबाइल नंबर दर्ज करें"),
                       filled: true,
                       fillColor: Colors.white,
                       border: OutlineInputBorder(
@@ -288,42 +375,45 @@
                     child: ElevatedButton(
                       onPressed: () async {
 
-                        if (phoneController.text.length != 10) {
+                        if (!RegExp(r'^[6-9][0-9]{9}$').hasMatch(phoneController.text)) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                                content: Text("Enter valid 10 digit number")),
+                            SnackBar(
+                              content: Text(
+                                t(
+                                  context,
+                                  "Enter valid 10 digit number",
+                                  "कृपया 10 अंकों का सही मोबाइल नंबर दर्ज करें",
+                                ),
+                              ),
+                            ),
                           );
-                          return;
+                          return; // 🔥 VERY IMPORTANT
                         }
-
                         await FirebaseAuth.instance.verifyPhoneNumber(
                           phoneNumber: "+91${phoneController.text.trim()}",
 
-                          verificationCompleted:
-                              (PhoneAuthCredential credential) {},
+                          verificationCompleted: (PhoneAuthCredential credential) async {
+                            // 🔥 AUTO LOGIN (important)
+                            await FirebaseAuth.instance.signInWithCredential(credential);
+                          },
 
                           verificationFailed: (FirebaseAuthException e) {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                  content: Text(
-                                      e.message ?? "Verification Failed")),
+                              SnackBar(content: Text(e.message ?? "Verification Failed")),
                             );
                           },
 
-                          codeSent:
-                              (String verificationId, int? resendToken) {
+                          codeSent: (String verificationId, int? resendToken) {
                             Navigator.push(
                               context,
                               MaterialPageRoute(
                                 builder: (context) =>
-                                    OtpScreen(
-                                        verificationId: verificationId),
+                                    OtpScreen(verificationId: verificationId),
                               ),
                             );
                           },
 
-                          codeAutoRetrievalTimeout:
-                              (String verificationId) {},
+                          codeAutoRetrievalTimeout: (String verificationId) {},
                         );
                       },
                       style: ElevatedButton.styleFrom(
@@ -332,9 +422,9 @@
                           borderRadius: BorderRadius.circular(20),
                         ),
                       ),
-                      child: const Text(
-                        "Login करें",
-                        style: TextStyle(fontSize: 18),
+                      child: Text(
+                        t(context, "Login", "लॉगिन करें"),
+                        style: const TextStyle(fontSize: 18),
                       ),
                     ),
                   ),
@@ -365,10 +455,18 @@
     final TextEditingController otpController = TextEditingController();
   
     void verifyOTP() async {
-  
+
       if (otpController.text.length != 6) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Enter valid 6 digit OTP")),
+          SnackBar(
+            content: Text(
+              t(
+                context,
+                "Enter valid 6 digit OTP",
+                "कृपया 6 अंकों का सही OTP दर्ज करें",
+              ),
+            ),
+          ),
         );
         return;
       }
@@ -394,9 +492,15 @@
         );
   
       } catch (e) {
-  
+
+        String errorMessage = t(
+            context,
+            "Invalid OTP. Please try again.",
+            "गलत OTP है, कृपया फिर से कोशिश करें"
+        );
+
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("OTP Failed: $e")),
+          SnackBar(content: Text(errorMessage)),
         );
       }
     }
@@ -410,10 +514,10 @@
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-  
-              const Text(
-                "OTP Verify करें",
-                style: TextStyle(
+
+              Text(
+                t(context, "Verify OTP", "OTP Verify करें"),
+                style: const TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.bold,
                   color: Colors.green,
@@ -560,9 +664,9 @@
 
                   const SizedBox(height: 50),
 
-                  const Text(
-                    "आप क्या काम करते हैं?",
-                    style: TextStyle(
+                  Text(
+                    t(context, "What work do you do?", "आप क्या काम करते हैं?"),
+                    style: const TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.bold,
                       color: Colors.green,
@@ -596,9 +700,9 @@
                         borderRadius: BorderRadius.circular(15),
                       ),
                     ),
-                    child: const Text(
-                      "आगे बढ़ें",
-                      style: TextStyle(fontSize: 18),
+                    child: Text(
+                      t(context, "Continue", "आगे बढ़ें"),
+                      style: const TextStyle(fontSize: 18),
                     ),
                   ),
 
@@ -619,8 +723,12 @@
   
     @override
     Widget build(BuildContext context) {
-      return const Scaffold(
-        body: Center(child: Text("Next Screen")),
+      return Scaffold(
+        body: Center(
+          child: Text(
+            t(context, "Next Screen", "अगली स्क्रीन"),
+          ),
+        ),
       );
     }
   }
@@ -645,7 +753,7 @@
   
     final nameController = TextEditingController();
     final workTypeController = TextEditingController();
-    final areaController = TextEditingController();
+    //final areaController = TextEditingController();
     final pinController = TextEditingController();
   
     File? selectedImage;
@@ -663,10 +771,12 @@
     String? selectedDistrict;
   
     // 🔵 STATE - DISTRICT DATA
-    final Map<String, List<String>> stateDistrictMap = {
-      "Rajasthan": ["Jaipur", "Jodhpur", "Udaipur", "Kota"],
-      "Uttar Pradesh": ["Lucknow", "Kanpur", "Agra"],
-      "Madhya Pradesh": ["Bhopal", "Indore", "Gwalior"],
+    final Map<String, List<Map<String, String>>> stateDistrictMap = {
+      "mp": [
+        {"en": "Bhopal", "hi": "भोपाल"},
+        {"en": "Indore", "hi": "इंदौर"},
+        {"en": "Raisen", "hi": "रायसेन"},
+      ],
     };
   
     // ================= AUDIO RECORD =================
@@ -730,45 +840,52 @@
     // 📸 PICK IMAGE
     Future<void> pickImage() async {
       try {
-        PermissionStatus status;
-  
-        if (await Permission.photos.isGranted) {
-          status = PermissionStatus.granted;
+        final XFile? pickedFile = await ImagePicker().pickImage(
+          source: ImageSource.gallery,
+          imageQuality: 60,
+        );
+
+        if (pickedFile != null) {
+          print("IMAGE PICKED: ${pickedFile.path}");
+
+          setState(() {
+            selectedImage = File(pickedFile.path);
+          });
         } else {
-          status = await Permission.photos.request();
+          print("NO IMAGE SELECTED");
         }
-  
-        if (status.isGranted) {
-          final XFile? pickedFile = await ImagePicker().pickImage(
-            source: ImageSource.gallery,
-            imageQuality: 60,
-          );
-  
-          if (pickedFile != null) {
-            setState(() {
-              selectedImage = File(pickedFile.path);
-            });
-          }
-        }
+
       } catch (e) {
         print("Image Picker Error: $e");
       }
     }
-  
-    // ☁ UPLOAD IMAGE
+
     Future<String?> uploadImage(File image) async {
       try {
+        print("🚀 UPLOAD START");
+
         final user = FirebaseAuth.instance.currentUser;
-        if (user == null) return null;
-  
+        if (user == null) {
+          print("❌ USER NULL");
+          return null;
+        }
+
         final ref = FirebaseStorage.instance
             .ref()
             .child("profile_images/${user.uid}.jpg");
-  
+
         await ref.putFile(image);
-        return await ref.getDownloadURL();
+
+        print("📤 FILE UPLOADED");
+
+        String url = await ref.getDownloadURL();
+
+        print("✅ DOWNLOAD URL: $url");
+
+        return url;
+
       } catch (e) {
-        print("Upload error: $e");
+        print("❌ Upload error: $e");
         return null;
       }
     }
@@ -776,7 +893,8 @@
   
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        throw Exception("Location services are disabled.");
+        await Geolocator.openLocationSettings();
+        return Future.error("Location off");
       }
   
       LocationPermission permission = await Geolocator.checkPermission();
@@ -784,15 +902,44 @@
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
       }
-  
+
       if (permission == LocationPermission.deniedForever) {
-        throw Exception("Location permission permanently denied.");
+        await Geolocator.openAppSettings();
+        return Future.error("Location permission denied");
       }
   
       return await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
       );
     }
+
+    //Future<Position> getUserLocation() async {
+
+     // bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      //if (!serviceEnabled) {
+     //   throw Exception("Location services are disabled.");
+      //}
+
+      //LocationPermission permission = await Geolocator.checkPermission();
+
+      //if (permission == LocationPermission.denied) {
+       // permission = await Geolocator.requestPermission();
+      //}
+
+      //if (permission == LocationPermission.deniedForever) {
+       // throw Exception("Location permission permanently denied.");
+     // }
+
+      //return await Geolocator.getCurrentPosition(
+       // desiredAccuracy: LocationAccuracy.best, // 🔥 CHANGE THIS
+      //);
+   // }
+
+
+// 🔥 YAHAN PASTE KARO (NAYA FUNCTION)
+
+
+
     // 💾 SAVE PROFILE
     Future<void> saveProfile() async {
       try {
@@ -820,16 +967,27 @@
   
         /// 🔥 LOCATION GET KARO
         Position position = await getUserLocation();
-  
-        String? finalImageUrl = imageUrl;
+
+        String areaName = await getAreaName(
+          position.latitude,
+          position.longitude,
+        );
+
+        String? finalImageUrl;
         String? finalAudioUrl;
-  
+
         if (audioPath != null) {
           finalAudioUrl = await uploadAudio(File(audioPath!));
         }
-  
+
         if (selectedImage != null) {
           finalImageUrl = await uploadImage(selectedImage!);
+
+          print("🔥 FINAL IMAGE URL: $finalImageUrl");
+
+          if (finalImageUrl == null) {
+            print("⚠️ Upload failed, saving without DP");
+          }
         }
         await FirebaseFirestore.instance
             .collection("users")
@@ -841,15 +999,18 @@
           "workType": workTypeController.text.trim(),
           "state": selectedState,
           "district": selectedDistrict,
-          "area": areaController.text.trim(),
+          //"area": areaController.text.trim(),
           "pin": pinController.text.trim(),
           "dp": finalImageUrl ?? "",
   
           // 🔥 IMPORTANT DEFAULT FIELDS
           "wallet": 0,
+          "isFirstJobFreeUsed": false,
           "totalJobs": 0,
           "totalEarned": 0,
           "isAvailable": true,
+
+
   
           // ⭐ RATING SYSTEM DEFAULT
           "rating": 0.0,
@@ -857,6 +1018,7 @@
   
           "latitude": position.latitude,
           "longitude": position.longitude,
+          "area": areaName,
   
           "createdAt": Timestamp.now(),
   
@@ -890,7 +1052,9 @@
     Widget build(BuildContext context) {
       return Scaffold(
         appBar: AppBar(
-          title: const Text("Profile Setup"),
+          title: Text(
+            t(context, "Profile Setup", "प्रोफाइल सेटअप"),
+          ),
           backgroundColor: Colors.green,
         ),
         body: Padding(
@@ -929,7 +1093,7 @@
                   ),
   
                   const SizedBox(height: 30),
-  
+
                   GestureDetector(
                     onLongPressStart: (_) => startRecording(),
                     onLongPressEnd: (_) => stopRecording(),
@@ -942,17 +1106,25 @@
                       child: Center(
                         child: isRecording
                             ? Text(
-                          "Recording... $recordingSeconds s",
+                          t(
+                            context,
+                            "Recording... $recordingSeconds s",
+                            "रिकॉर्डिंग... $recordingSeconds सेकंड",
+                          ),
                           style: const TextStyle(color: Colors.white),
                         )
-                            : const Row(
+                            : Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Icon(Icons.mic, color: Colors.white),
-                            SizedBox(width: 8),
+                            const Icon(Icons.mic, color: Colors.white),
+                            const SizedBox(width: 8),
                             Text(
-                              "Hold to Record Intro",
-                              style: TextStyle(color: Colors.white),
+                              t(
+                                context,
+                                "Hold to Record Intro",
+                                "इंट्रो रिकॉर्ड करने के लिए दबाकर रखें",
+                              ),
+                              style: const TextStyle(color: Colors.white),
                             ),
                           ],
                         ),
@@ -972,11 +1144,13 @@
                   // 🔽 STATE DROPDOWN
                   DropdownButtonFormField<String>(
                     value: selectedState,
-                    hint: const Text("राज्य चुनें"),
+                    hint: Text(
+                      t(context, "Select State", "राज्य चुनें"),
+                    ),
                     items: stateDistrictMap.keys.map((state) {
                       return DropdownMenuItem(
                         value: state,
-                        child: Text(state),
+                        child: Text(state), // abhi ok hai (later improve karenge)
                       );
                     }).toList(),
                     onChanged: (value) {
@@ -985,8 +1159,9 @@
                         selectedDistrict = null;
                       });
                     },
-                    validator: (value) =>
-                    value == null ? "राज्य चुनना आवश्यक है" : null,
+                    validator: (value) => value == null
+                        ? t(context, "State is required", "राज्य चुनना आवश्यक है")
+                        : null,
                   ),
   
                   const SizedBox(height: 20),
@@ -994,30 +1169,49 @@
                   // 🔽 DISTRICT DROPDOWN
                   DropdownButtonFormField<String>(
                     value: selectedDistrict,
-                    hint: const Text("जिला चुनें"),
-                    items: selectedState == null
-                        ? []
-                        : stateDistrictMap[selectedState]!
-                        .map((district) => DropdownMenuItem(
-                      value: district,
-                      child: Text(district),
-                    ))
-                        .toList(),
-                    onChanged: (value) {
+                    hint: Text(
+                      t(context, "Select District", "जिला चुनें"),
+                    ),
+                    items: (selectedState != null
+                        ? stateDistrictMap[selectedState] ?? []
+                        : [])
+                        .map<DropdownMenuItem<String>>((districtMap) {
+
+                      String districtName =
+                      Localizations.localeOf(context).languageCode == 'hi'
+                          ? districtMap["hi"]!
+                          : districtMap["en"]!;
+
+                      return DropdownMenuItem<String>(
+                        value: districtName,
+                        child: Text(districtName),
+                      );
+                    }).toList(),
+
+                    onChanged: selectedState == null
+                        ? null // disable dropdown
+                        : (value) {
                       setState(() {
                         selectedDistrict = value;
                       });
                     },
-                    validator: (value) =>
-                    value == null ? "जिला चुनना आवश्यक है" : null,
+                    validator: (value) => value == null
+                        ? t(context, "District is required", "जिला चुनना आवश्यक है")
+                        : null,
                   ),
   
                   const SizedBox(height: 20),
-  
-                  buildField("क्षेत्र", areaController),
-                  buildField("पिन कोड", pinController,
-                      keyboard: TextInputType.number),
-  
+
+                  //buildField(
+                    //t(context, "Area", "क्षेत्र"),
+                    //areaController,
+                  //),
+
+                  buildField(
+                    t(context, "PIN Code", "पिन कोड"),
+                    pinController,
+                    keyboard: TextInputType.number,
+                  ),
                   const SizedBox(height: 30),
   
                   isLoading
@@ -1029,7 +1223,9 @@
                       minimumSize:
                       const Size(double.infinity, 50),
                     ),
-                    child: const Text("Save & Continue"),
+                    child: Text(
+                      t(context, "Save & Continue", "सेव करें और आगे बढ़ें"),
+                    ),
                   )
                 ],
               ),
@@ -1048,7 +1244,11 @@
           keyboardType: keyboard,
           validator: (value) {
             if (value == null || value.isEmpty) {
-              return "यह फील्ड खाली नहीं हो सकता";
+              return t(
+                context,
+                "This field cannot be empty",
+                "यह फील्ड खाली नहीं हो सकता",
+              );
             }
             return null;
           },
@@ -1068,7 +1268,7 @@
       recordingTimer?.cancel();
       nameController.dispose();
       workTypeController.dispose();
-      areaController.dispose();
+      //areaController.dispose();
       pinController.dispose();
       super.dispose();
     }
@@ -1085,6 +1285,9 @@
   }
   
   class _DashboardScreenState extends State<DashboardScreen> {
+
+    bool isProcessing = false;
+
     final FlutterSoundRecorder dashboardRecorder = FlutterSoundRecorder();
     final AudioPlayer audioPlayer = AudioPlayer();
 
@@ -1149,7 +1352,11 @@
 
         if (!status.isGranted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("Mic permission nahi mili")),
+            SnackBar(
+              content: Text(
+                t(context, "Microphone permission denied", "माइक की अनुमति नहीं मिली"),
+              ),
+            ),
           );
           return;
         }
@@ -1202,7 +1409,15 @@
       // ❗ short recording check
       if (recordSeconds < 2) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("❌ Recording too short")),
+          SnackBar(
+            content: Text(
+              t(
+                context,
+                "Recording too short",
+                "रिकॉर्डिंग बहुत छोटी है",
+              ),
+            ),
+          ),
         );
         return;
       }
@@ -1210,9 +1425,11 @@
       // 🎧 PREVIEW DIALOG ///// yeha kaam kar rahe hai
       showDialog(
         context: context,
-        builder: (context) {
+        builder: (dialogContext) {
           return AlertDialog(
-            title: Text("Preview Intro 🎧"),
+            title: Text(
+              "${t(context, "Preview Intro", "इंट्रो सुनें")} 🎧",
+            ),
 
             content: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1222,18 +1439,21 @@
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.timer, size: 18),
-                    SizedBox(width: 6),
+                    const Icon(Icons.timer, size: 18),
+                    const SizedBox(width: 6),
                     Text(
                       "$recordSeconds sec",
-                      style: TextStyle(fontWeight: FontWeight.bold),
+                      style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                   ],
                 ),
 
-                SizedBox(height: 10),
+                const SizedBox(height: 10),
 
-                Text("Play karke check kar lo"),
+                Text(
+                  t(context, "Play and check before saving",
+                      "सेव करने से पहले सुन लें"),
+                ),
               ],
             ),
 
@@ -1247,70 +1467,83 @@
                     audioPlayer.play();
                   }
                 },
-                child: Text("Play"),
+                child: Text(t(context, "Play", "चलाएँ")),
               ),
 
               // ❌ DISCARD
               TextButton(
                 onPressed: () async {
                   await audioPlayer.stop();
-                  Navigator.pop(context);
+                  Navigator.pop(dialogContext);
                 },
-                child: Text("Discard"),
+                child: Text(t(context, "Discard", "हटाएँ")),
               ),
 
               // ✅ SAVE
               TextButton(
                 onPressed: () async {
                   await audioPlayer.stop();
-                  Navigator.pop(context);
+                  Navigator.pop(dialogContext);
 
                   try {
                     if (dashboardAudioPath == null) {
-                      print("❌ Path null");
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            t(context, "Audio not found", "ऑडियो नहीं मिला"),
+                          ),
+                        ),
+                      );
                       return;
                     }
 
                     File file = File(dashboardAudioPath!);
 
-                    print("📁 File exists: ${file.existsSync()}");
-
                     String? url = await uploadDashboardAudio(file);
 
-                    print("🔥 FINAL URL: $url");
-
-                    // 🔥 IMPORTANT CHECK
                     if (url == null || url.isEmpty) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text("❌ Upload failed")),
+                        SnackBar(
+                          content: Text(
+                            t(context, "Upload failed", "अपलोड विफल"),
+                          ),
+                        ),
                       );
                       return;
                     }
 
-                    // 🔥 FIRESTORE SAVE (FINAL FIX)
                     await FirebaseFirestore.instance
                         .collection("users")
                         .doc(FirebaseAuth.instance.currentUser!.uid)
                         .set({
                       "audioUrl": url,
-                      "hasIntro": true, // 🔥 MUST
+                      "hasIntro": true,
                     }, SetOptions(merge: true));
-
-                    print("✅ Firestore UPDATED");
 
                     setState(() {
                       audioUrl = url;
                     });
 
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text("✅ Intro Saved")),
+                      SnackBar(
+                        content: Text(
+                          t(context, "Intro saved", "इंट्रो सेव हो गया"),
+                        ),
+                        backgroundColor: Colors.green,
+                      ),
                     );
 
                   } catch (e) {
-                    print("❌ SAVE ERROR: $e");
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          t(context, "Something went wrong", "कुछ गलत हो गया"),
+                        ),
+                      ),
+                    );
                   }
                 },
-                child: Text("Save"),
+                child: Text(t(context, "Save", "सेव करें")),
               )
             ],
           );
@@ -1385,6 +1618,8 @@
     void initState() {
       super.initState();
 
+      updateUserLocation();
+
       getUserData();
       loadAudioUrl(); // 🔥 YAHI ADD KARNA HAI
 
@@ -1436,23 +1671,27 @@
               Map<String, dynamic> otherUser =
               (otherUserDoc.data() ?? {}) as Map<String, dynamic>;
 
-              Navigator.push(
-                navigatorKey.currentContext!,
-                MaterialPageRoute(
-                  builder: (_) => WorkerDetailScreen(
-                    name: otherUser["name"] ?? "",
-                    work: otherUser["workType"] ?? "",
-                    area: otherUser["area"] ?? "",
-                    phone: otherUser["phone"] ?? "",
-                    lat: (otherUser["latitude"] ?? 0).toDouble(),
-                    lng: (otherUser["longitude"] ?? 0).toDouble(),
-                    rating: (otherUser["rating"] ?? 0).toDouble(),
-                    introAudio: otherUser["audioUrl"] ?? "",
+              final ctx = navigatorKey.currentContext;
+
+              if (ctx != null) {
+                Navigator.push(
+                  ctx,
+                  MaterialPageRoute(
+                    builder: (_) => WorkerDetailScreen(
+                      name: otherUser["name"] ?? "",
+                      work: otherUser["workType"] ?? "",
+                      area: otherUser["area"] ?? "",
+                      phone: otherUser["phone"] ?? "",
+                      lat: (otherUser["latitude"] ?? 0).toDouble(),
+                      lng: (otherUser["longitude"] ?? 0).toDouble(),
+                      rating: (otherUser["rating"] ?? 0).toDouble(),
+                      introAudio: otherUser["audioUrl"] ?? "",
+                    ),
                   ),
-                ),
-              ).then((_) {
-                isDetailOpen = false;
-              });
+                ).then((_) {
+                  isDetailOpen = false;
+                });
+              }
 
             }
 
@@ -1486,32 +1725,55 @@
 
             if (status == "accepted") {
 
-              Navigator.push(
-                navigatorKey.currentContext!,
-                MaterialPageRoute(
-                  builder: (_) => const WorkerAcceptedScreen(),
-                ),
-              );
+              final ctx = navigatorKey.currentContext;
+
+              if (ctx != null) {
+                Navigator.push(
+                  ctx,
+                  MaterialPageRoute(
+                    builder: (_) => const WorkerAcceptedScreen(),
+                  ),
+                );
+              }
 
             }
 
             if (status == "rejected") {
 
-              ScaffoldMessenger.of(navigatorKey.currentContext!)
-                  .showSnackBar(
-                const SnackBar(
-                  content: Text("Worker rejected your request"),
-                ),
-              );
+              if (navigatorKey.currentContext == null) return;
+
+              final ctx = navigatorKey.currentContext;
+
+              if (ctx != null) {
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      t(
+                        ctx,
+                        "Worker rejected your request",
+                        "मज़दूर ने आपकी रिक्वेस्ट अस्वीकार कर दी",
+                      ),
+                    ),
+                  ),
+                );
+              }
 
             }
 
             if (status == "expired") {
 
-              ScaffoldMessenger.of(navigatorKey.currentContext!)
-                  .showSnackBar(
-                const SnackBar(
-                  content: Text("Request expired"),
+              final ctx = navigatorKey.currentContext;
+              if (ctx == null) return;
+
+              ScaffoldMessenger.of(ctx).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    t(
+                      ctx,
+                      "Request expired",
+                      "रिक्वेस्ट की समय सीमा समाप्त हो गई",
+                    ),
+                  ),
                 ),
               );
 
@@ -1661,7 +1923,9 @@
                               borderRadius: BorderRadius.circular(20),
                             ),
                             child: Text(
-                              isAvailable ? "Available" : "Offline",
+                              isAvailable
+                                  ? t(context, "Available", "उपलब्ध")
+                                  : t(context, "Offline", "ऑफलाइन"),
                               style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w500,
@@ -1673,15 +1937,6 @@
                       ),
                     ],
                   ),
-
-                  SizedBox(height: 6),
-
-                  Text(
-                    work,
-                    style: TextStyle(color: Color(0xFF1E88E5)),
-                  ),
-
-                  SizedBox(height: 6),
 
                   Row(
                     children: [
@@ -1714,6 +1969,11 @@
     }
     // DATA FETCH KARNE KA FUNCTION
     void getUserData() async {
+
+      print("CHECK RUNNING");
+      print("MY NUMBER: ${FirebaseAuth.instance.currentUser?.phoneNumber}");
+
+      print(FirebaseAuth.instance.currentUser?.phoneNumber);
       final user = FirebaseAuth.instance.currentUser;
       if (user != null) {
         var doc = await FirebaseFirestore.instance.collection("users").doc(user.uid).get();
@@ -1781,8 +2041,11 @@
           ? "${distanceMeters.toStringAsFixed(0)} m"
           : "${(distanceMeters / 1000).toStringAsFixed(1)} KM";
 
+      final ctx = navigatorKey.currentContext;
+      if (ctx == null) return;
+
       showGeneralDialog(
-        context: navigatorKey.currentContext!,
+        context: ctx,
         barrierDismissible: false,
         barrierLabel: "HireRequest",
         barrierColor: Colors.black.withOpacity(0.6),
@@ -2135,9 +2398,9 @@
 
                     const SizedBox(height: 15),
 
-                    const Text(
-                      "🔒 Direct Connection Unlock",
-                      style: TextStyle(
+                    Text(
+                      "🔒 ${t(context, "Direct Connection Unlock", "सीधा संपर्क अनलॉक")}",
+                      style: const TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
                       ),
@@ -2146,10 +2409,14 @@
 
                     const SizedBox(height: 12),
 
-                    const Text(
-                      "To contact this worker directly,\ncomplete the ₹5 secure connection fee.",
+                    Text(
+                      t(
+                        context,
+                        "You can contact this worker directly (Free for limited time)",
+                        "आप इस मज़दूर से सीधे संपर्क कर सकते हैं (फिलहाल मुफ्त)",
+                      ),
                       textAlign: TextAlign.center,
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 15,
                         color: Colors.black54,
                       ),
@@ -2157,15 +2424,19 @@
 
                     const SizedBox(height: 15),
 
-                    const Row(
+                    Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.access_time,
+                        const Icon(Icons.access_time,
                             color: Colors.orange, size: 18),
-                        SizedBox(width: 6),
+                        const SizedBox(width: 6),
                         Text(
-                          "Valid for next 10 minutes",
-                          style: TextStyle(
+                          t(
+                            context,
+                            "Valid for next 10 minutes",
+                            "अगले 10 मिनट तक मान्य",
+                          ),
+                          style: const TextStyle(
                             color: Colors.orange,
                             fontWeight: FontWeight.w500,
                           ),
@@ -2203,29 +2474,69 @@
                               ),
                             ),
 
-                            onPressed: () async {
+                            onPressed: isProcessing ? null : () async {
+
+                              setState(() {
+                                isProcessing = true;
+                              });
 
                               try {
 
-                                /// 🔥 WALLET ₹5 DEDUCT
-                                await processHireWithCommission(
-                                  user1Id: FirebaseAuth.instance.currentUser!.uid,
-                                  user2Id: data["senderId"],
-                                );
+                                String currentUserId = FirebaseAuth.instance.currentUser!.uid;
 
+                                // 🔥 USER DATA FETCH
+                                DocumentSnapshot userDoc = await FirebaseFirestore.instance
+                                    .collection("users")
+                                    .doc(currentUserId)
+                                    .get();
+
+                                Map<String, dynamic> userData =
+                                (userDoc.data() ?? {}) as Map<String, dynamic>;
+
+                                bool isFirstFreeUsed =
+                                    userData["isFirstJobFreeUsed"] ?? false;
+
+                                // 🔥 BACKEND PROTECTION (DUPLICATE PAYMENT STOP)
+
+                                DocumentSnapshot requestDoc = await FirebaseFirestore.instance
+                                    .collection("hireRequests")
+                                    .doc(data["id"])
+                                    .get();
+
+                                bool alreadyPaid = requestDoc["receiverPaid"] ?? false;
+
+                                if (alreadyPaid) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text("Payment already done")),
+                                  );
+                                  return;
+                                }
+
+                                /// 🎁 FREE MODE (NO PAYMENT)
+
+
+
+                                /// ✅ REQUEST UPDATE
                                 await FirebaseFirestore.instance
                                     .collection("hireRequests")
                                     .doc(data["id"])
                                     .update({
-                                  "receiverPaid": true
+                                  "receiverPaid": true,
+                                  "senderPaid": true,
                                 });
 
                                 Navigator.of(dialogContext).pop();
                                 isDialogOpen = false;
 
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text("₹5 Payment Successful"),
+                                  SnackBar(
+                                    content: Text(
+                                      t(
+                                        context,
+                                        "Connection successful",
+                                        "संपर्क सफल हुआ",
+                                      ),
+                                    ),
                                   ),
                                 );
 
@@ -2261,39 +2572,34 @@
 
                                 isDialogOpen = false;
 
-                                /// 🔴 WALLET BALANCE NAHI HAI
-                                if (e.toString().contains("Balance Required")) {
-
-                                  Navigator.of(dialogContext).pop();
-
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => const WalletScreen(),
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      t(
+                                        context,
+                                        "Something went wrong",
+                                        "कुछ गलत हो गया",
+                                      ),
                                     ),
-                                  );
-
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text("Wallet में ₹5 नहीं है, पहले recharge करें"),
-                                    ),
-                                  );
-
-                                } else {
-
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text(e.toString())),
-                                  );
-
-                                }
+                                  ),
+                                );
 
                               }
 
+                              setState(() {
+                                isProcessing = false;
+                              });
                             },
 
-                            child: const Text(
-                              "Pay ₹5 Securely",
-                              style: TextStyle(fontWeight: FontWeight.bold),
+                            child: Text(
+                              t(
+                                context,
+                                "Continue",
+                                "आगे बढ़ें",
+                              ),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
                         ),
@@ -2339,23 +2645,27 @@
             Map<String, dynamic> worker =
             (workerDoc.data() ?? {}) as Map<String, dynamic>;
 
-            Navigator.push(
-              navigatorKey.currentContext!,
-              MaterialPageRoute(
-                builder: (_) => WorkerDetailScreen(
-                  name: worker["name"] ?? "",
-                  work: worker["workType"] ?? "",
-                  area: worker["area"] ?? "",
-                  phone: worker["phone"] ?? "",
-                  lat: (worker["latitude"] ?? 0).toDouble(),
-                  lng: (worker["longitude"] ?? 0).toDouble(),
-                  rating: (worker["rating"] ?? 0).toDouble(),
-                  introAudio: worker["audioUrl"] ?? "",
+            final ctx = navigatorKey.currentContext;
+
+            if (ctx != null) {
+              Navigator.push(
+                ctx,
+                MaterialPageRoute(
+                  builder: (_) => WorkerDetailScreen(
+                    name: worker["name"] ?? "",
+                    work: worker["workType"] ?? "",
+                    area: worker["area"] ?? "",
+                    phone: worker["phone"] ?? "",
+                    lat: (worker["latitude"] ?? 0).toDouble(),
+                    lng: (worker["longitude"] ?? 0).toDouble(),
+                    rating: (worker["rating"] ?? 0).toDouble(),
+                    introAudio: worker["audioUrl"] ?? "",
+                  ),
                 ),
-              ),
-            ).then((_) {
-              isDetailOpen = false;
-            });
+              ).then((_) {
+                isDetailOpen = false;
+              });
+            }
 
           }
 
@@ -2363,6 +2673,35 @@
 
       });
 
+    }
+
+    Future<void> updateUserLocation() async {
+      try {
+        Position position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.best,
+        );
+
+        String uid = FirebaseAuth.instance.currentUser!.uid;
+
+        // 🔥 ADD THIS
+        String areaName = await getAreaName(
+          position.latitude,
+          position.longitude,
+        );
+
+        await FirebaseFirestore.instance
+            .collection("users")
+            .doc(uid)
+            .update({
+          "latitude": position.latitude,
+          "longitude": position.longitude,
+          "area": areaName// 🔥 IMPORTANT
+        });
+
+        print("✅ Location + Area updated");
+      } catch (e) {
+        print("❌ Location error: $e");
+      }
     }
   
   
@@ -2375,22 +2714,28 @@
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
-  
+
           if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(
-              child: Text("कोई nearby मजदूर नहीं मिला"),
+            return Center(
+              child: Text(
+                t(
+                  context,
+                  "No nearby workers found",
+                  "कोई नजदीकी मज़दूर नहीं मिला",
+                ),
+              ),
             );
           }
   
           var workers = snapshot.data!;
-  
+
           return SizedBox(
-            height: 260, // Mazdoor list card height
+            height: 280, // Mazdoor list card height
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
               itemCount: workers.length,
               itemBuilder: (context, index) {
-  
+
                 var data = workers[index];
 
                 return Container(
@@ -2412,11 +2757,18 @@
         },
       );
     }
-  
+
     Future<void> processHireWithCommission({
       required String user1Id,
       required String user2Id,
     }) async {
+
+      // 🔥 FREE MODE CONTROL (बस यही add किया है)
+      bool isFreeMode = true;
+
+      if (isFreeMode) {
+        return; // 🚀 payment skip
+      }
 
       const int commission = 5;
 
@@ -2425,36 +2777,49 @@
         DocumentReference user1Ref =
         FirebaseFirestore.instance.collection("users").doc(user1Id);
 
-        DocumentReference user2Ref =
-        FirebaseFirestore.instance.collection("users").doc(user2Id);
-
         DocumentReference adminRef =
         FirebaseFirestore.instance.collection("admin").doc("main");
 
         DocumentSnapshot user1Snap = await transaction.get(user1Ref);
-        DocumentSnapshot user2Snap = await transaction.get(user2Ref);
         DocumentSnapshot adminSnap = await transaction.get(adminRef);
 
-        int user1Wallet = user1Snap["wallet"] ?? 0;
-        int user2Wallet = user2Snap["wallet"] ?? 0;
+        int user1Wallet =
+            (user1Snap.data() as Map<String, dynamic>?)?["wallet"] ?? 0;
+        bool user1FreeUsed =
+            (user1Snap.data() as Map<String, dynamic>?)?["isFirstJobFreeUsed"] ?? false;
         int adminWallet = adminSnap["wallet"] ?? 0;
 
-        if (user1Wallet < commission || user2Wallet < commission) {
-          throw Exception("₹5 Balance Required");
+        int totalCommission = 0;
+
+        // 🔥 ONLY CURRENT USER (user1)
+        if (!user1FreeUsed) {
+
+          // 🎁 FIRST JOB FREE
+          transaction.update(user1Ref, {
+            "isFirstJobFreeUsed": true,
+          });
+
+        } else {
+
+          // 💰 NORMAL PAYMENT
+          if (user1Wallet < commission) {
+            throw Exception("₹5 Balance Required");
+          }
+
+          transaction.update(user1Ref, {
+            "wallet": user1Wallet - commission,
+          });
+
+          totalCommission += commission;
         }
 
-        transaction.update(user1Ref, {
-          "wallet": user1Wallet - commission,
-        });
-
-        transaction.update(user2Ref, {
-          "wallet": user2Wallet - commission,
-        });
-
-        transaction.update(adminRef, {
-          "wallet": adminWallet + (commission * 2),
-          "totalEarning": FieldValue.increment(commission * 2),
-        });
+        // 🔥 ADMIN
+        if (totalCommission > 0) {
+          transaction.update(adminRef, {
+            "wallet": adminWallet + totalCommission,
+            "totalEarning": FieldValue.increment(totalCommission),
+          });
+        }
       });
     }
     Stream<List<Map<String, dynamic>>> _getNearbyJobsStream() async* {
@@ -2474,16 +2839,20 @@
         yield [];
         return;
       }
-  
-      double userLat = (userDoc.data()?["latitude"] ?? 0).toDouble();
-      double userLng = (userDoc.data()?["longitude"] ?? 0).toDouble();
+
+      Position currentPosition = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.best,
+      );
+
+      double userLat = currentPosition.latitude;
+      double userLng = currentPosition.longitude;
 
       String role = widget.role.toString().trim();
 
       String targetRole =
-      (role == "worker" || role == "मज़दूर")
-          ? "ठेकेदार"
-          : "मज़दूर";
+      (role == "worker")
+          ? "employer"
+          : "worker";
 
       yield* FirebaseFirestore.instance
           .collection("users")
@@ -2511,7 +2880,7 @@
           double distance = Geolocator.distanceBetween(
               userLat, userLng, workerLat, workerLng);
 
-          if (distance <= 50000 ) {
+          if (distance <= 10000 ) {
             data["distance"] = distance;
             nearbyWorkers.add(data);
           }
@@ -2533,12 +2902,18 @@
   
         // ================= SIDE DRAWER (Wallet shift yahan kiya hai) =================
         drawer: _buildDrawer(context),
-  
+
         appBar: AppBar(
           backgroundColor: Colors.transparent,
           elevation: 0,
           iconTheme: const IconThemeData(color: Colors.black),
-          title: const Text("Dashboard", style: TextStyle(color: Colors.black, fontSize: 16)),
+          title: Text(
+            t(context, "Dashboard", "डैशबोर्ड"),
+            style: const TextStyle(
+              color: Colors.black,
+              fontSize: 16,
+            ),
+          ),
         ),
   
         body: SafeArea(
@@ -2563,21 +2938,43 @@
                   spacing: 10,
                   runSpacing: 10,
                   children: [
-                    _smallNavButton(Icons.people_alt, "मजदूर लिस्ट", Colors.blue, () {
-                      Navigator.push(context, MaterialPageRoute(builder: (context) => MajdoorListScreen()));
-                    }),
-                    _smallNavButton(Icons.business, "ठेकेदार लिस्ट", Colors.purple, () {
-                      Navigator.push(context, MaterialPageRoute(builder: (context) => ThekedarListScreen()));
-                    }),
+                    _smallNavButton(
+                      Icons.people_alt,
+                      t(context, "Worker List", "मज़दूर लिस्ट"),
+                      Colors.blue,
+                          () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (context) => MajdoorListScreen()),
+                        );
+                      },
+                    ),
 
-                    _smallNavButton(Icons.notifications, "Requests", Colors.orange, () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const RequestsUpdatesScreen(),
-                        ),
-                      );
-                    }),
+                    _smallNavButton(
+                      Icons.business,
+                      t(context, "Contractor List", "ठेकेदार लिस्ट"),
+                      Colors.purple,
+                          () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (context) => ThekedarListScreen()),
+                        );
+                      },
+                    ),
+
+                    _smallNavButton(
+                      Icons.notifications,
+                      t(context, "Requests", "रिक्वेस्ट्स"),
+                      Colors.orange,
+                          () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const RequestsUpdatesScreen(),
+                          ),
+                        );
+                      },
+                    ),
                   ],
                 ),
   
@@ -2586,18 +2983,34 @@
   
   
                 // ================= NEARBY JOBS =================
-                _smallSectionHeader("Nearby Jobs"),
+                _smallSectionHeader(
+                  t(context, "Nearby Jobs", "नज़दीकी काम"),
+                ),
                 const SizedBox(height: 8),
-  
+
                 _buildNearbyJobs(),
-  
+
                 const SizedBox(height: 18),
-                // ================= WORK HISTORY =================
-                _smallSectionHeader("My Work History"),
+
+// ================= WORK HISTORY =================
+                _smallSectionHeader(
+                  t(context, "My Work History", "मेरा कार्य इतिहास"),
+                ),
                 const SizedBox(height: 8),
+
                 _compactJobScroll([
-                  _compactJobItem("Brickwork", "Civil Lines", "₹8002 dy", 4),
-                  _compactJobItem("Unloading Cement", "Sahadatganj", "₹200", 4),
+                  _compactJobItem(
+                    t(context, "Brickwork", "ईंट का काम"),
+                    t(context, "Civil Lines", "सिविल लाइंस"),
+                    "₹800 / day",
+                    4,
+                  ),
+                  _compactJobItem(
+                    t(context, "Unloading Cement", "सीमेंट उतारना"),
+                    t(context, "Sahadatganj", "सहादतगंज"),
+                    "₹200",
+                    4,
+                  ),
                 ]),
               ],
             ),
@@ -2695,9 +3108,9 @@
                       Icons.account_balance_wallet,
                       color: Colors.green,
                     ),
-                    title: const Text(
-                      "My Wallet",
-                      style: TextStyle(fontWeight: FontWeight.w600),
+                    title: Text(
+                      t(context, "My Wallet", "मेरा वॉलेट"),
+                      style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                     trailing: Text(
                       "₹$wallet",
@@ -2707,10 +3120,15 @@
                       ),
                     ),
                     onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const WalletScreen(),
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            t(
+                              context,
+                              "Wallet coming soon",
+                              "वॉलेट सुविधा जल्द आ रही है",
+                            ),
+                          ),
                         ),
                       );
                     },
@@ -2723,53 +3141,121 @@
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     children: [
 
-                      _drawerTile(Icons.edit, "Edit Profile", () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => ProfileSetupScreen(role: role),
-                          ),
-                        );
-                      }),
+                      _drawerTile(
+                        Icons.edit,
+                        t(context, "Edit Profile", "प्रोफाइल संपादित करें"),
+                            () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ProfileSetupScreen(role: role),
+                            ),
+                          );
+                        },
+                      ),
 
-                      _drawerTile(Icons.bar_chart, "Earnings Report", () {
-                        Navigator.push(context,
-                            MaterialPageRoute(builder: (_) => const EarningsReportScreen()));
-                      }),
+                      if (FirebaseAuth.instance.currentUser?.phoneNumber == "+916261360602")
+                        _drawerTile(
+                          Icons.admin_panel_settings,
+                          "Admin Dashboard",
+                              () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const AdminDashboardScreen(),
+                              ),
+                            );
+                          },
+                        ),
+
+
+
+                      _drawerTile(
+                        Icons.bar_chart,
+                        t(context, "Earnings Report", "कमाई रिपोर्ट"),
+                            () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const EarningsReportScreen(),
+                            ),
+                          );
+                        },
+                      ),
 
                       const Divider(),
 
-                      _drawerTile(Icons.work, "My Jobs", () {
-                        Navigator.push(context,
-                            MaterialPageRoute(builder: (_) => const MyJobsScreen()));
-                      }),
+                      _drawerTile(
+                        Icons.work,
+                        t(context, "My Jobs", "मेरे काम"),
+                            () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const MyJobsScreen(),
+                            ),
+                          );
+                        },
+                      ),
 
-                      _drawerTile(Icons.history, "Hire History", () {
-                        Navigator.push(context,
-                            MaterialPageRoute(builder: (_) => const HireHistoryScreen()));
-                      }),
+                      _drawerTile(
+                        Icons.history,
+                        t(context, "Hire History", "भर्ती इतिहास"),
+                            () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const HireHistoryScreen(),
+                            ),
+                          );
+                        },
+                      ),
 
 
 
                       const Divider(),
 
-                      _drawerTile(Icons.star, "My Ratings", () {
-                        Navigator.push(context,
-                            MaterialPageRoute(builder: (_) => const MyRatingsScreen()));
-                      }),
+                      _drawerTile(
+                        Icons.star,
+                        t(context, "My Ratings", "मेरी रेटिंग"),
+                            () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const MyRatingsScreen(),
+                            ),
+                          );
+                        },
+                      ),
 
-                      _drawerTile(Icons.workspace_premium, "Premium Badge", () {
-                        Navigator.push(context,
-                            MaterialPageRoute(builder: (_) => const PremiumScreen()));
-                      }),
+                      _drawerTile(
+                        Icons.workspace_premium,
+                        t(context, "Premium Badge", "प्रीमियम बैज"),
+                            () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const PremiumScreen(),
+                            ),
+                          );
+                        },
+                      ),
 
                       const Divider(),
 
-                      _drawerTile(Icons.settings, "Settings", () {}),
+                      _drawerTile(
+                        Icons.settings,
+                        t(context, "Settings", "सेटिंग्स"),
+                            () {},
+                      ),
 
-                      _drawerTile(Icons.language, "Language / भाषा", () {
-                        showLanguageDialog(context);
-                      }),
+                      _drawerTile(
+                        Icons.language,
+                        t(context, "Language", "भाषा"),
+                            () {
+                          showLanguageDialog(context);
+                        },
+                      ),
 
                       _drawerTile(Icons.logout, "Logout", () async {
 
@@ -2825,47 +3311,42 @@
 
 
     void showLanguageDialog(BuildContext context) {
-
       showDialog(
         context: context,
         builder: (context) {
-
           return AlertDialog(
-
             title: const Text("Select Language"),
-
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
 
+                // 🇮🇳 HINDI
                 ListTile(
-                  leading: const Icon(Icons.language),
                   title: const Text("Hindi (हिंदी)"),
                   onTap: () {
                     Navigator.pop(context);
 
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("हिंदी चुनी गई")),
-                    );
+                    // 🔥 YAHAN ADD KARNA HAI
+                    (context.findAncestorStateOfType<_MyAppState>())
+                        ?.changeLanguage('hi');
                   },
                 ),
 
+                // 🇬🇧 ENGLISH
                 ListTile(
-                  leading: const Icon(Icons.language),
                   title: const Text("English"),
                   onTap: () {
                     Navigator.pop(context);
 
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("English Selected")),
-                    );
+                    // 🔥 YAHAN ADD KARNA HAI
+                    (context.findAncestorStateOfType<_MyAppState>())
+                        ?.changeLanguage('en');
                   },
                 ),
 
               ],
             ),
           );
-
         },
       );
     }
@@ -2881,7 +3362,7 @@
   
             _bannerImage("assets/images/banner1.png"),
             _bannerImage("assets/images/banner2.png"),
-            _bannerImage("assets/images/banner1.png"),
+            _bannerImage("assets/images/banner3.png"),
   
           ],
         ),
@@ -2909,96 +3390,108 @@
           color: Colors.white,
           borderRadius: BorderRadius.circular(20),
         ),
-        child: Column(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-  
-                // 🔥 REAL DP
-                CircleAvatar(
-                  radius: 28,
-                  backgroundImage: dp.isNotEmpty
-                      ? NetworkImage(dp)
-                      : null,
-                  child: dp.isEmpty
-                      ? const Icon(Icons.person)
-                      : null,
-                ),
-  
-                const SizedBox(width: 10),
-  
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+
+            // 🔥 DP
+            CircleAvatar(
+              radius: 28,
+              backgroundImage: dp.isNotEmpty ? NetworkImage(dp) : null,
+              child: dp.isEmpty ? const Icon(Icons.person) : null,
+            ),
+
+            const SizedBox(width: 10),
+
+            // 🔥 LEFT SIDE (Name + Role + Area)
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+
+                  Text(
+                    name,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+
+                  Text(
+                    widget.role,
+                    style: const TextStyle(
+                      color: Colors.grey,
+                      fontSize: 13,
+                    ),
+                  ),
+
+                  const SizedBox(height: 4),
+
+                  Row(
                     children: [
-  
-                      // 🔥 REAL NAME
+                      const Icon(Icons.location_on, size: 12, color: Colors.grey),
+                      const SizedBox(width: 4),
                       Text(
-                        name,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-  
-                      // 🔥 ROLE
-                      Text(
-                        widget.role,
+                        area,
                         style: const TextStyle(
                           color: Colors.grey,
-                          fontSize: 13,
+                          fontSize: 11,
                         ),
-                      ),
-  
-                      const SizedBox(height: 4),
-  
-                      // 🔥 REAL AREA
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.location_on,
-                            size: 12,
-                            color: Colors.grey,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            area,
-                            style: const TextStyle(
-                              color: Colors.grey,
-                              fontSize: 11,
-                            ),
-                          ),
-                        ],
                       ),
                     ],
                   ),
-                ),
-  
+                ],
+              ),
+            ),
+
+            // 🔥 RIGHT SIDE (Available + Record SAME COLUMN)
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+
                 _buildAvailabilityToggle(),
+
+                const SizedBox(height: 4), // 🔥 gap control
+
+                _smallProfileProgress(),
               ],
             ),
-  
-            const SizedBox(height: 10),
-  
-            _smallProfileProgress(),
           ],
         ),
       );
     }
-  
-  
-  
+
+
+
     Widget _buildAvailabilityToggle() {
       return GestureDetector(
-        onTap: toggleAvailability,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
+        onTap: () async {
+
+          String uid = FirebaseAuth.instance.currentUser!.uid;
+
+          bool newValue = !isAvailable;
+
+          setState(() {
+            isAvailable = newValue;
+          });
+
+          await FirebaseFirestore.instance
+              .collection("users")
+              .doc(uid)
+              .update({
+            "isAvailable": newValue,
+          });
+
+        },
+        child: Container(
+          width: 110,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
             color: isAvailable ? Colors.green : Colors.grey,
             borderRadius: BorderRadius.circular(20),
           ),
           child: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
                 isAvailable ? Icons.check_circle : Icons.cancel,
@@ -3007,11 +3500,13 @@
               ),
               const SizedBox(width: 5),
               Text(
-                isAvailable ? "Available" : "Offline",
+                isAvailable
+                    ? t(context, "Available", "उपलब्ध")
+                    : t(context, "Offline", "ऑफलाइन"),
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
             ],
@@ -3035,32 +3530,31 @@
       });
     }
 
+    // Ye naya code hai jo click karne par dusri screen par le jayega
+
     Widget _smallProfileProgress() {
       return GestureDetector(
         onLongPressStart: (_) => startDashboardRecording(),
         onLongPressEnd: (_) => stopDashboardRecording(),
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+          width: 110,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), // 🔥 SAME
           decoration: BoxDecoration(
-            color: Colors.green,
+            color: isRecordingDashboard ? Colors.red : Colors.orange,
             borderRadius: BorderRadius.circular(20),
           ),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
             children: [
-
-              Icon(Icons.mic, color: Colors.white, size: 18),
-              SizedBox(width: 8),
-
+              Icon(Icons.mic, color: Colors.white, size: 14),
+              SizedBox(width: 5),
               Text(
                 isRecordingDashboard
-                    ? "Recording... $recordSeconds s"
-                    : (audioUrl ?? "").isNotEmpty
-                    ? "Intro Available ✅ (Hold to Replace)"
-                    : "Hold to Record Intro",
+                    ? "$recordSeconds s"
+                    : "Record",
                 style: TextStyle(
                   color: Colors.white,
-                  fontSize: 13,
+                  fontSize: 11, // 🔥 SAME
                   fontWeight: FontWeight.w500,
                 ),
               )
@@ -3069,8 +3563,6 @@
         ),
       );
     }
-  
-    // Ye naya code hai jo click karne par dusri screen par le jayega
     Widget _smallNavButton(IconData icon, String text, Color color, VoidCallback onTap) {
       return GestureDetector(
         onTap: onTap, // Click hone par kya hoga, wo yahan se decide hoga
@@ -3105,7 +3597,7 @@
         ),
       );
     }
-  
+
     Widget _smallSectionHeader(String title) {
       return Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -3175,80 +3667,93 @@
       required String user1Id,
       required String user2Id,
     }) async {
-  
+
+      // 🔥 FREE MODE CONTROL (बस यही add किया है)
+      bool isFreeMode = true;
+
+      if (isFreeMode) {
+        return; // 🚀 payment skip
+      }
+
       const int commission = 5;
-  
+
       await FirebaseFirestore.instance.runTransaction((transaction) async {
-  
+
         DocumentReference user1Ref =
         FirebaseFirestore.instance.collection("users").doc(user1Id);
-  
-        DocumentReference user2Ref =
-        FirebaseFirestore.instance.collection("users").doc(user2Id);
-  
+
         DocumentReference adminRef =
         FirebaseFirestore.instance.collection("admin").doc("main");
-  
+
         DocumentSnapshot user1Snap = await transaction.get(user1Ref);
-        DocumentSnapshot user2Snap = await transaction.get(user2Ref);
         DocumentSnapshot adminSnap = await transaction.get(adminRef);
-  
-        int user1Wallet = user1Snap["wallet"] ?? 0;
-        int user2Wallet = user2Snap["wallet"] ?? 0;
+
+        int user1Wallet =
+            (user1Snap.data() as Map<String, dynamic>?)?["wallet"] ?? 0;
+        bool user1FreeUsed =
+            (user1Snap.data() as Map<String, dynamic>?)?["isFirstJobFreeUsed"] ?? false;
         int adminWallet = adminSnap["wallet"] ?? 0;
-  
-        if (user1Wallet < commission ||
-            user2Wallet < commission) {
-          throw Exception("₹5 Balance Required");
+
+        int totalCommission = 0;
+
+        // ================= USER 1 =================
+        if (!user1FreeUsed) {
+
+          transaction.update(user1Ref, {
+            "isFirstJobFreeUsed": true,
+          });
+
+          transaction.set(
+            user1Ref.collection("transactions").doc(),
+            {
+              "amount": 0,
+              "type": "info",
+              "message": "First Job Free",
+              "createdAt": Timestamp.now(),
+            },
+          );
+
+        } else {
+
+          if (user1Wallet < commission) {
+            throw Exception("₹5 Balance Required");
+          }
+
+          transaction.update(user1Ref, {
+            "wallet": user1Wallet - commission,
+          });
+
+          transaction.set(
+            user1Ref.collection("transactions").doc(),
+            {
+              "amount": commission,
+              "type": "debit",
+              "message": "Platform Fee",
+              "createdAt": Timestamp.now(),
+            },
+          );
+
+          totalCommission += commission;
         }
-  
-        // 🔻 Deduct ₹5 from both users
-        transaction.update(user1Ref, {
-          "wallet": user1Wallet - commission,
-        });
-  
-        transaction.update(user2Ref, {
-          "wallet": user2Wallet - commission,
-        });
-  
-        // 🔺 Add ₹10 to Admin
-        transaction.update(adminRef, {
-          "wallet": adminWallet + (commission * 2),
-          "totalEarning": FieldValue.increment(commission * 2),
-        });
-  
-        // 🔥 User1 Transaction
-        transaction.set(
-          user1Ref.collection("transactions").doc(),
-          {
-            "amount": commission,
-            "type": "debit",
-            "message": "Platform Fee",
-            "createdAt": Timestamp.now(),
-          },
-        );
-  
-        // 🔥 User2 Transaction
-        transaction.set(
-          user2Ref.collection("transactions").doc(),
-          {
-            "amount": commission,
-            "type": "debit",
-            "message": "Platform Fee",
-            "createdAt": Timestamp.now(),
-          },
-        );
-  
-        // 🔥 Admin Transaction
-        transaction.set(
-          adminRef.collection("transactions").doc(),
-          {
-            "amount": commission * 2,
-            "type": "credit",
-            "message": "Platform Commission",
-            "createdAt": Timestamp.now(),
-          },
-        );
+
+        // ================= ADMIN =================
+        if (totalCommission > 0) {
+
+          transaction.update(adminRef, {
+            "wallet": adminWallet + totalCommission,
+            "totalEarning": FieldValue.increment(totalCommission),
+          });
+
+          transaction.set(
+            adminRef.collection("transactions").doc(),
+            {
+              "amount": totalCommission,
+              "type": "credit",
+              "message": "Platform Commission",
+              "createdAt": Timestamp.now(),
+            },
+          );
+        }
       });
     }
 
@@ -3260,7 +3765,7 @@
   
       return Scaffold(
         backgroundColor: const Color(0xFFF2F2F2),
-  
+
         appBar: AppBar(
           title: const Text("मजदूर लिस्ट",
               style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
@@ -3272,7 +3777,7 @@
         body: StreamBuilder<QuerySnapshot>(
           stream: FirebaseFirestore.instance
               .collection("users")
-              .where("role", isEqualTo: "मज़दूर")
+              .where("role", isEqualTo: "worker")
               .where("isAvailable", isEqualTo: true)
               .snapshots(),
           builder: (context, snapshot) {
@@ -3665,12 +4170,16 @@
 
       if (wallet < fee) {
 
-        Navigator.push(
-          navigatorKey.currentContext!,
-          MaterialPageRoute(
-            builder: (_) => const WalletScreen(),
-          ),
-        );
+        final ctx = navigatorKey.currentContext;
+
+        if (ctx != null) {
+          Navigator.push(
+            ctx,
+            MaterialPageRoute(
+              builder: (_) => const WalletScreen(),
+            ),
+          );
+        }
 
         throw Exception("Please recharge wallet");
       }
@@ -3786,14 +4295,7 @@
                                 color: Colors.blue.shade50,
                                 borderRadius: BorderRadius.circular(20),
                               ),
-                              child: Row(
-                                children: [
-                                  Icon(Icons.play_arrow, size: 14, color: Colors.blue),
-                                  SizedBox(width: 3),
-                                  Text("Intro",
-                                      style: TextStyle(fontSize: 10, color: Colors.blue)),
-                                ],
-                              ),
+
                             ),
                           ),
 
@@ -3886,14 +4388,7 @@
                   color: Colors.blue.shade50,
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: Row(
-                  children: [
-                    Icon(Icons.play_arrow, size: 14, color: Colors.blue),
-                    SizedBox(width: 3),
-                    Text("Intro",
-                        style: TextStyle(fontSize: 10, color: Colors.blue)),
-                  ],
-                ),
+
               ),
             ),
 
@@ -3960,20 +4455,65 @@
 
                           try {
 
-                            await sendHireRequest(
-                              senderId: currentUserId,
-                              receiverId: workerId,
-                            );
+                            String currentUserId = FirebaseAuth.instance.currentUser!.uid;
+
+                            // 🔥 USER DATA FETCH
+                            DocumentSnapshot userDoc = await FirebaseFirestore.instance
+                                .collection("users")
+                                .doc(currentUserId)
+                                .get();
+
+                            bool isFirstFreeUsed = userDoc["isFirstJobFreeUsed"] ?? false;
+
+                            /// 🎁 FIRST JOB FREE
+                            if (!isFirstFreeUsed) {
+
+                              await FirebaseFirestore.instance
+                                  .collection("users")
+                                  .doc(currentUserId)
+                                  .update({
+                                "isFirstJobFreeUsed": true,
+                              });
+
+                              // 👉 Direct request send (no balance check)
+                              await sendHireRequest(
+                                senderId: currentUserId,
+                                receiverId: workerId,
+                              );
+
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    t(context, "First Job Free 🎉", "पहला काम फ्री 🎉"),
+                                  ),
+                                ),
+                              );
+
+                            } else {
+
+                              /// 🔥 NORMAL FLOW (₹5 REQUIRED)
+                              await sendHireRequest(
+                                senderId: currentUserId,
+                                receiverId: workerId,
+                              );
+
+                            }
 
                           } catch (e) {
 
                             String error = e.toString();
 
-                            if (error.contains("Balance Required")) {
+                            if (error.contains("BALANCE_REQUIRED")) {
 
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text("Wallet में ₹5 नहीं है, पहले recharge करें"),
+                                SnackBar(
+                                  content: Text(
+                                    t(
+                                      context,
+                                      "Insufficient balance. Please recharge first",
+                                      "वॉलेट में ₹5 नहीं है, पहले रिचार्ज करें",
+                                    ),
+                                  ),
                                 ),
                               );
 
@@ -3987,13 +4527,18 @@
                             } else {
 
                               ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text(error)),
+                                SnackBar(
+                                  content: Text(
+                                    t(
+                                      context,
+                                      "Something went wrong",
+                                      "कुछ गलत हो गया",
+                                    ),
+                                  ),
+                                ),
                               );
-
                             }
-
                           }
-
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: isPending ? Colors.grey : Colors.green,
@@ -4049,96 +4594,104 @@
       required String user1Id,
       required String user2Id,
     }) async {
-  
+
+      // 🔥 FREE MODE CONTROL (बस यही add किया है)
+      bool isFreeMode = true;
+
+      if (isFreeMode) {
+        return; // 🚀 payment skip
+      }
+
       const int commission = 5;
-  
+
       await FirebaseFirestore.instance.runTransaction((transaction) async {
-  
+
         DocumentReference user1Ref =
         FirebaseFirestore.instance.collection("users").doc(user1Id);
-  
-        DocumentReference user2Ref =
-        FirebaseFirestore.instance.collection("users").doc(user2Id);
-  
+
         DocumentReference adminRef =
         FirebaseFirestore.instance.collection("admin").doc("main");
-  
+
         DocumentSnapshot user1Snap = await transaction.get(user1Ref);
-        DocumentSnapshot user2Snap = await transaction.get(user2Ref);
         DocumentSnapshot adminSnap = await transaction.get(adminRef);
-  
+
         Map<String, dynamic> user1Data =
             user1Snap.data() as Map<String, dynamic>? ?? {};
-  
-        Map<String, dynamic> user2Data =
-            user2Snap.data() as Map<String, dynamic>? ?? {};
-  
+
         Map<String, dynamic> adminData =
             adminSnap.data() as Map<String, dynamic>? ?? {};
-  
+
         int user1Wallet = user1Data["wallet"] ?? 0;
-        int user2Wallet = user2Data["wallet"] ?? 0;
+        bool user1FreeUsed = user1Data["isFirstJobFreeUsed"] ?? false;
         int adminWallet = adminData["wallet"] ?? 0;
-  
-        if (user1Wallet < commission ||
-            user2Wallet < commission) {
-          throw Exception("₹5 Balance Required");
-        }
-  
-        // 🔻 Deduct ₹5 from both
-        transaction.update(user1Ref, {
-          "wallet": user1Wallet - commission,
-        });
-  
-        transaction.update(user2Ref, {
-          "wallet": user2Wallet - commission,
-        });
-  
-        // 🔺 Add ₹10 to Admin
-        if (!adminSnap.exists) {
-          transaction.set(adminRef, {
-            "wallet": commission * 2,
-            "totalEarning": commission * 2,
+
+        int totalCommission = 0;
+
+        // ================= USER 1 =================
+        if (!user1FreeUsed) {
+
+          transaction.update(user1Ref, {
+            "isFirstJobFreeUsed": true,
           });
+
+          transaction.set(
+            user1Ref.collection("transactions").doc(),
+            {
+              "amount": 0,
+              "type": "info",
+              "message": "First Job Free",
+              "createdAt": Timestamp.now(),
+            },
+          );
+
         } else {
-          transaction.update(adminRef, {
-            "wallet": adminWallet + (commission * 2),
-            "totalEarning": FieldValue.increment(commission * 2),
+
+          if (user1Wallet < commission) {
+            throw Exception("₹5 Balance Required");
+          }
+
+          transaction.update(user1Ref, {
+            "wallet": user1Wallet - commission,
           });
+
+          transaction.set(
+            user1Ref.collection("transactions").doc(),
+            {
+              "amount": commission,
+              "type": "debit",
+              "message": "Platform Fee",
+              "createdAt": Timestamp.now(),
+            },
+          );
+
+          totalCommission += commission;
         }
-  
-        // 🔥 User1 Transaction
-        transaction.set(
-          user1Ref.collection("transactions").doc(),
-          {
-            "amount": commission,
-            "type": "debit",
-            "message": "Platform Fee",
-            "createdAt": Timestamp.now(),
-          },
-        );
-  
-        // 🔥 User2 Transaction
-        transaction.set(
-          user2Ref.collection("transactions").doc(),
-          {
-            "amount": commission,
-            "type": "debit",
-            "message": "Platform Fee",
-            "createdAt": Timestamp.now(),
-          },
-        );
-  
-        // 🔥 Admin Transaction
-        transaction.set(
-          adminRef.collection("transactions").doc(),
-          {
-            "amount": commission * 2,
-            "type": "credit",
-            "message": "Platform Commission",
-            "createdAt": Timestamp.now(),
-          },
-        );
+
+        // ================= ADMIN =================
+        if (totalCommission > 0) {
+
+          if (!adminSnap.exists) {
+            transaction.set(adminRef, {
+              "wallet": totalCommission,
+              "totalEarning": totalCommission,
+            });
+          } else {
+            transaction.update(adminRef, {
+              "wallet": adminWallet + totalCommission,
+              "totalEarning": FieldValue.increment(totalCommission),
+            });
+          }
+
+          transaction.set(
+            adminRef.collection("transactions").doc(),
+            {
+              "amount": totalCommission,
+              "type": "credit",
+              "message": "Platform Commission",
+              "createdAt": Timestamp.now(),
+            },
+          );
+        }
       });
     }
 
@@ -4166,7 +4719,7 @@
         body: StreamBuilder<QuerySnapshot>(
           stream: FirebaseFirestore.instance
               .collection("users")
-              .where("role", isEqualTo: "ठेकेदार")
+              .where("role", isEqualTo: "employer")
               .where("isAvailable", isEqualTo: true)
               .snapshots(),
           builder: (context, snapshot) {
@@ -4234,83 +4787,25 @@
   
   class _WalletScreenState extends State<WalletScreen> {
   
-    final TextEditingController amountController = TextEditingController();
-    late Razorpay _razorpay;
+
+
   
     @override
     void initState() {
       super.initState();
   
-      _razorpay = Razorpay();
+
   
-      _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _handlePaymentSuccess);
-      _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _handlePaymentError);
+
     }
   
-    void _handlePaymentSuccess(PaymentSuccessResponse response) async {
+
   
-      String uid = FirebaseAuth.instance.currentUser!.uid;
-      int amount = int.tryParse(amountController.text.trim()) ?? 0;
+
   
-      await FirebaseFirestore.instance
-          .collection("users")
-          .doc(uid)
-          .update({
-        "wallet": FieldValue.increment(amount),
-        "totalEarned": FieldValue.increment(amount),
-      });
+
   
-      await FirebaseFirestore.instance
-          .collection("users")
-          .doc(uid)
-          .collection("transactions")
-          .add({
-        "amount": amount,
-        "type": "credit",
-        "message": "Wallet Recharge",
-        "createdAt": Timestamp.now(),
-      });
-  
-      amountController.clear();
-  
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Payment Successful")),
-      );
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => const RequestsUpdatesScreen(),
-        ),
-      );
-    }
-  
-    void _handlePaymentError(PaymentFailureResponse response) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Payment Failed")),
-      );
-    }
-  
-    void openCheckout(int amount) {
-  
-      var options = {
-        'key': 'rzp_test_SJeW8zM6X7fQQI', // 🔥 apna Razorpay test key daalna
-        'amount': amount * 100,
-        'name': 'Rozgaar Peetha',
-        'description': 'Wallet Recharge',
-      };
-  
-      try {
-        _razorpay.open(options);
-      } catch (e) {
-        print(e);
-      }
-    }
-  
-    @override
-    void dispose() {
-      _razorpay.clear();
-      super.dispose();
-    }
+
   
     @override
     Widget build(BuildContext context) {
@@ -4319,9 +4814,11 @@
   
       return Scaffold(
         backgroundColor: const Color(0xFFF2F2F2),
-  
+
         appBar: AppBar(
-          title: const Text("मेरा वॉलेट"),
+          title: Text(
+            t(context, "My Wallet", "मेरा वॉलेट"),
+          ),
           backgroundColor: Colors.green,
         ),
   
@@ -4360,9 +4857,9 @@
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
-                          "कुल बैलेंस",
-                          style: TextStyle(
+                        Text(
+                          t(context, "Total Balance", "कुल बैलेंस"),
+                          style: const TextStyle(
                             color: Colors.white70,
                             fontSize: 16,
                           ),
@@ -4381,10 +4878,10 @@
                   ),
   
                   const SizedBox(height: 40),
-  
-                  const Text(
-                    "रिचार्ज करें",
-                    style: TextStyle(
+
+                  Text(
+                    t(context, "Recharge", "रिचार्ज करें"),
+                    style: const TextStyle(
                       color: Colors.green,
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
@@ -4394,19 +4891,7 @@
                   const SizedBox(height: 15),
   
                   // 💵 Amount Input
-                  TextField(
-                    controller: amountController,
-                    keyboardType: TextInputType.number,
-                    decoration: InputDecoration(
-                      prefixIcon: const Icon(Icons.currency_rupee),
-                      hintText: "राशि डालें (जैसे 100)",
-                      filled: true,
-                      fillColor: Colors.white,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(15),
-                      ),
-                    ),
-                  ),
+
   
                   const SizedBox(height: 20),
   
@@ -4417,37 +4902,33 @@
                     child: ElevatedButton(
                       onPressed: () {
   
-                        int amount =
-                            int.tryParse(amountController.text.trim()) ?? 0;
-  
-                        if (amount <= 0) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                                content: Text("सही राशि डालें")),
-                          );
-                          return;
-                        }
-  
-                        openCheckout(amount);
+
+
+
+
+
+                        // ✅ PAYMENT OPEN
+
                       },
+
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.green,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(30),
                         ),
                       ),
-                      child: const Text(
-                        "रिचार्ज करें",
-                        style: TextStyle(fontSize: 18),
+                      child: Text(
+                        t(context, "Recharge", "रिचार्ज करें"),
+                        style: const TextStyle(fontSize: 18),
                       ),
                     ),
                   ),
   
                   const SizedBox(height: 40),
-  
-                  const Text(
-                    "ट्रांजेक्शन हिस्ट्री",
-                    style: TextStyle(
+
+                  Text(
+                    t(context, "Transaction History", "ट्रांजेक्शन हिस्ट्री"),
+                    style: const TextStyle(
                       color: Colors.green,
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -4464,12 +4945,15 @@
 
                         .snapshots(),
                     builder: (context, snapshot) {
-  
-                      if (!snapshot.hasData ||
-                          snapshot.data!.docs.isEmpty) {
-                        return const Text(
-                          "कोई ट्रांजेक्शन नहीं",
-                          style: TextStyle(color: Colors.grey),
+
+                      if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                        return Text(
+                          t(
+                            context,
+                            "No transactions found",
+                            "कोई ट्रांजेक्शन नहीं मिला",
+                          ),
+                          style: const TextStyle(color: Colors.grey),
                         );
                       }
   
@@ -4626,27 +5110,35 @@
               itemBuilder: (context, index) {
   
                 var request = docs[index];
-  
+
                 return ListTile(
-                  title: Text("New Hire Request"),
-                  subtitle: Text("Tap to Accept"),
+                  title: Text(
+                    t(context, "New Hire Request", "नई रिक्वेस्ट"),
+                  ),
+                  subtitle: Text(
+                    t(context, "Tap to Accept", "स्वीकार करने के लिए टैप करें"),
+                  ),
                   trailing: ElevatedButton(
                     onPressed: () async {
-  
+
                       await FirebaseFirestore.instance
                           .collection("hireRequests")
                           .doc(request.id)
                           .update({
                         "status": "accepted"
                       });
-  
-                      ScaffoldMessenger.of(context)
-                          .showSnackBar(
-                        const SnackBar(
-                            content: Text("Accepted")),
+
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            t(context, "Accepted", "स्वीकार किया गया"),
+                          ),
+                        ),
                       );
                     },
-                    child: const Text("Accept"),
+                    child: Text(
+                      t(context, "Accept", "स्वीकार करें"),
+                    ),
                   ),
                 );
               },
@@ -4663,8 +5155,20 @@
     @override
     Widget build(BuildContext context) {
       return Scaffold(
-        appBar: AppBar(title: const Text("My Ratings")),
-        body: const Center(child: Text("Ratings Coming Soon")),
+        appBar: AppBar(
+          title: Text(
+            t(context, "My Ratings", "मेरी रेटिंग्स"),
+          ),
+        ),
+        body: Center(
+          child: Text(
+            t(
+              context,
+              "Ratings Coming Soon",
+              "रेटिंग्स जल्द आ रही हैं",
+            ),
+          ),
+        ),
       );
     }
   }
@@ -4675,8 +5179,20 @@
     @override
     Widget build(BuildContext context) {
       return Scaffold(
-        appBar: AppBar(title: const Text("My Jobs")),
-        body: const Center(child: Text("Jobs Coming Soon")),
+        appBar: AppBar(
+          title: Text(
+            t(context, "My Jobs", "मेरे काम"),
+          ),
+        ),
+        body: Center(
+          child: Text(
+            t(
+              context,
+              "Jobs Coming Soon",
+              "काम जल्द आ रहे हैं",
+            ),
+          ),
+        ),
       );
     }
   }
@@ -4687,8 +5203,20 @@
     @override
     Widget build(BuildContext context) {
       return Scaffold(
-        appBar: AppBar(title: const Text("Edit Profile")),
-        body: const Center(child: Text("Edit Profile Coming Soon")),
+        appBar: AppBar(
+          title: Text(
+            t(context, "Edit Profile", "प्रोफाइल संपादित करें"),
+          ),
+        ),
+        body: Center(
+          child: Text(
+            t(
+              context,
+              "Edit Profile Coming Soon",
+              "प्रोफाइल संपादन जल्द उपलब्ध होगा",
+            ),
+          ),
+        ),
       );
     }
   }
@@ -4738,6 +5266,13 @@
       required String user2Id,
     }) async {
 
+      // 🔥 FREE MODE CONTROL (बस यही add किया है)
+      bool isFreeMode = true;
+
+      if (isFreeMode) {
+        return; // 🚀 payment skip
+      }
+
       const int commission = 5;
 
       await FirebaseFirestore.instance.runTransaction((transaction) async {
@@ -4745,37 +5280,60 @@
         DocumentReference user1Ref =
         FirebaseFirestore.instance.collection("users").doc(user1Id);
 
-        DocumentReference user2Ref =
-        FirebaseFirestore.instance.collection("users").doc(user2Id);
-
         DocumentReference adminRef =
         FirebaseFirestore.instance.collection("admin").doc("main");
 
         DocumentSnapshot user1Snap = await transaction.get(user1Ref);
-        DocumentSnapshot user2Snap = await transaction.get(user2Ref);
         DocumentSnapshot adminSnap = await transaction.get(adminRef);
 
-        int user1Wallet = user1Snap["wallet"] ?? 0;
-        int user2Wallet = user2Snap["wallet"] ?? 0;
-        int adminWallet = adminSnap["wallet"] ?? 0;
+        Map<String, dynamic> user1Data =
+            user1Snap.data() as Map<String, dynamic>? ?? {};
 
-        if (user2Wallet < commission) {
-          throw Exception("₹5 Balance Required");
+        Map<String, dynamic> adminData =
+            adminSnap.data() as Map<String, dynamic>? ?? {};
+
+        int user1Wallet = user1Data["wallet"] ?? 0;
+        bool user1FreeUsed = user1Data["isFirstJobFreeUsed"] ?? false;
+        int adminWallet = adminData["wallet"] ?? 0;
+
+        int totalCommission = 0;
+
+        // 🔥 ONLY USER 1
+        if (!user1FreeUsed) {
+
+          // 🎁 FIRST JOB FREE
+          transaction.update(user1Ref, {
+            "isFirstJobFreeUsed": true,
+          });
+
+        } else {
+
+          // 💰 NORMAL PAYMENT
+          if (user1Wallet < commission) {
+            throw Exception("₹5 Balance Required");
+          }
+
+          transaction.update(user1Ref, {
+            "wallet": user1Wallet - commission,
+          });
+
+          totalCommission += commission;
         }
 
-        transaction.update(user1Ref, {
-          "wallet": user1Wallet - commission,
-        });
-
-        transaction.update(user2Ref, {
-          "wallet": user2Wallet - commission,
-        });
-
-        transaction.update(adminRef, {
-          "wallet": adminWallet + (commission * 2),
-          "totalEarning": FieldValue.increment(commission * 2),
-        });
-
+        // 🔥 ADMIN
+        if (totalCommission > 0) {
+          if (!adminSnap.exists) {
+            transaction.set(adminRef, {
+              "wallet": totalCommission,
+              "totalEarning": totalCommission,
+            });
+          } else {
+            transaction.update(adminRef, {
+              "wallet": adminWallet + totalCommission,
+              "totalEarning": FieldValue.increment(totalCommission),
+            });
+          }
+        }
       });
     }
 
@@ -4850,8 +5408,8 @@
                   mainAxisSize: MainAxisSize.min,
                   children: [
 
-                    const Text(
-                      "To contact this worker directly complete the ₹5 secure connection fee.",
+                    Text(
+                      t(context, "Direct Connection Unlock", "सीधा संपर्क अनलॉक"),
                       textAlign: TextAlign.center,
                     ),
 
@@ -4883,9 +5441,13 @@
 
                     const SizedBox(height: 10),
 
-                    const Text(
-                      "Valid for next 10 minutes",
-                      style: TextStyle(
+                    Text(
+                      t(
+                        context,
+                        "Valid for next 10 minutes",
+                        "अगले 10 मिनट तक मान्य",
+                      ),
+                      style: const TextStyle(
                         color: Colors.orange,
                       ),
                     ),
@@ -4917,16 +5479,14 @@
 
                         timer?.cancel();
 
-                        await processHireWithCommission(
-                          user1Id: FirebaseAuth.instance.currentUser!.uid,
-                          user2Id: data["receiverId"],
-                        );
+                        // ❌ PAYMENT REMOVE (FREE MODE)
 
                         await FirebaseFirestore.instance
                             .collection("hireRequests")
                             .doc(data["id"])
                             .update({
-                          "receiverPaid": true
+                          "receiverPaid": true,
+                          "senderPaid": true,
                         });
 
                         Navigator.pop(dialogContext);
@@ -4960,7 +5520,9 @@
 
       return Scaffold(
         appBar: AppBar(
-          title: const Text("My Requests"),
+          title: Text(
+            t(context, "My Requests", "मेरी रिक्वेस्ट्स"),
+          ),
           backgroundColor: Colors.green,
         ),
 
@@ -4968,7 +5530,6 @@
           stream: FirebaseFirestore.instance
               .collection("hireRequests")
               .where("senderId", isEqualTo: uid)
-
               .snapshots(),
           builder: (context, snapshot) {
 
@@ -4979,8 +5540,10 @@
             var docs = snapshot.data!.docs;
 
             if (docs.isEmpty) {
-              return const Center(
-                child: Text("No requests yet"),
+              return Center(
+                child: Text(
+                  t(context, "No requests yet", "अभी तक कोई रिक्वेस्ट नहीं"),
+                ),
               );
             }
 
@@ -5003,16 +5566,35 @@
 
                   title: Text(
                     status == "accepted"
-                        ? "Worker accepted your request"
-                        : "Waiting for worker response",
+                        ? t(
+                      context,
+                      "Worker accepted your request",
+                      "मज़दूर ने आपकी रिक्वेस्ट स्वीकार कर ली",
+                    )
+                        : t(
+                      context,
+                      "Waiting for worker response",
+                      "मज़दूर के जवाब का इंतजार",
+                    ),
                   ),
 
                   subtitle: status == "accepted"
-                      ? const Text("Tap to unlock connection")
-                      : Text("Status: $status"),
+                      ? Text(
+                    t(
+                      context,
+                      "Tap to unlock connection",
+                      "कनेक्शन खोलने के लिए टैप करें",
+                    ),
+                  )
+                      : Text(
+                    t(
+                      context,
+                      "Status: $status",
+                      "स्थिति: $status",
+                    ),
+                  ),
 
                   onTap: () {
-
                     if (status == "accepted") {
 
                       Map<String, dynamic> requestData =
@@ -5021,9 +5603,7 @@
                       requestData["id"] = docs[index].id;
 
                       showReceiverPaymentDialog(context, requestData);
-
                     }
-
                   },
                 );
               },
@@ -5061,9 +5641,13 @@
 
               const SizedBox(height: 20),
 
-              const Text(
-                "Worker accepted your request",
-                style: TextStyle(
+              Text(
+                t(
+                  context,
+                  "Worker accepted your request",
+                  "मज़दूर ने आपकी रिक्वेस्ट स्वीकार कर ली",
+                ),
+                style: const TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
                 ),
