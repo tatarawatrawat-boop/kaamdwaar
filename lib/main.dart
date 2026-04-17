@@ -9,7 +9,7 @@
   import 'package:cloud_firestore/cloud_firestore.dart';
   import 'package:permission_handler/permission_handler.dart';
   import 'package:geolocator/geolocator.dart';
-
+  import 'package:firebase_auth/firebase_auth.dart';
   import 'package:http/http.dart' as http;
   import 'dart:convert';
   import 'package:firebase_messaging/firebase_messaging.dart';
@@ -23,6 +23,10 @@
   import 'package:flutter_localizations/flutter_localizations.dart';
   import 'package:geocoding/geocoding.dart';
   import 'admin_dashboard_screen.dart';
+  import 'package:razorpay_flutter/razorpay_flutter.dart';
+  import 'package:flutter/material.dart';
+  import 'package:vibration/vibration.dart';
+  import 'settings_screen.dart';
 
 
 
@@ -126,6 +130,10 @@
   class _MyAppState extends State<MyApp> {
 
     Locale _locale = const Locale('en');
+
+    void changeAppLanguage(String langCode) {
+      changeLanguage(langCode);
+    }
 
     @override
     void initState() {
@@ -440,20 +448,20 @@
     }
   }
   // ===== OTP SCREEN WITH FIREBASE VERIFY =====
-  
+
   class OtpScreen extends StatefulWidget {
     final String verificationId;
-  
+
     const OtpScreen({super.key, required this.verificationId});
-  
+
     @override
     State<OtpScreen> createState() => _OtpScreenState();
   }
-  
+
   class _OtpScreenState extends State<OtpScreen> {
-  
+
     final TextEditingController otpController = TextEditingController();
-  
+
     void verifyOTP() async {
 
       if (otpController.text.length != 6) {
@@ -470,18 +478,18 @@
         );
         return;
       }
-  
+
       try {
-  
+
         PhoneAuthCredential credential =
         PhoneAuthProvider.credential(
           verificationId: widget.verificationId,
           smsCode: otpController.text.trim(),
         );
-  
+
         await FirebaseAuth.instance
             .signInWithCredential(credential);
-  
+
         // 🔥 OTP Success → Role Screen
         Navigator.pushReplacement(
           context,
@@ -490,7 +498,7 @@
             const RoleSelectionScreen(),
           ),
         );
-  
+
       } catch (e) {
 
         String errorMessage = t(
@@ -504,7 +512,7 @@
         );
       }
     }
-  
+
     @override
     Widget build(BuildContext context) {
       return Scaffold(
@@ -523,9 +531,9 @@
                   color: Colors.green,
                 ),
               ),
-  
+
               const SizedBox(height: 30),
-  
+
               TextField(
                 controller: otpController,
                 keyboardType: TextInputType.number,
@@ -545,9 +553,9 @@
                   ),
                 ),
               ),
-  
+
               const SizedBox(height: 25),
-  
+
               SizedBox(
                 width: double.infinity,
                 height: 55,
@@ -574,25 +582,25 @@
       );
     }
   }
-  
+
   // ===== ROLE SELECTION SCREEN (FINAL UI LIKE IMAGE) =====
   class RoleSelectionScreen extends StatefulWidget {
     const RoleSelectionScreen({super.key});
-  
+
     @override
     State<RoleSelectionScreen> createState() => _RoleSelectionScreenState();
   }
-  
+
   class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
-  
+
     String? selectedRole;
-  
+
     Future<void> saveRoleAndContinue() async {
       if (selectedRole == null) return;
-  
+
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString("user_role", selectedRole!);
-  
+
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
@@ -600,13 +608,13 @@
         ),
       );
     }
-  
+
     Widget roleCard({
       required String image,
       required String title,
     }) {
       bool isSelected = selectedRole == title;
-  
+
       return GestureDetector(
         onTap: () {
           setState(() {
@@ -716,11 +724,11 @@
       );
     }
   }
-  
+
   // TEMP NEXT SCREEN
   class NextScreen extends StatelessWidget {
     const NextScreen({super.key});
-  
+
     @override
     Widget build(BuildContext context) {
       return Scaffold(
@@ -732,44 +740,57 @@
       );
     }
   }
-  
-  
-  // ===== _ProfileSetupScreen =====
-  
-  
-  
+
+
+  // ===== ProfileSetupScreen (with Edit Profile) =====
+
   class ProfileSetupScreen extends StatefulWidget {
     final String role;
-  
+
     const ProfileSetupScreen({super.key, required this.role});
-  
+
     @override
     State<ProfileSetupScreen> createState() => _ProfileSetupScreenState();
   }
-  
+
   class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
-  
+
     final _formKey = GlobalKey<FormState>();
-  
+
     final nameController = TextEditingController();
     final workTypeController = TextEditingController();
-    //final areaController = TextEditingController();
     final pinController = TextEditingController();
-  
+
     File? selectedImage;
     String? imageUrl;
-  
+
+    // 🔥 Edit mode ke liye new variables
+    String? existingImageUrl;
+    String? existingAudioUrl;
+    String? existingState;
+    String? existingDistrict;
+    bool isEditMode = false;
+
     final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
     String? audioPath;
     bool isRecording = false;
     int recordingSeconds = 0;
     Timer? recordingTimer;
-  
+
     bool isLoading = false;
-  
+
     String? selectedState;
     String? selectedDistrict;
-  
+
+    bool _isValidDistrict(String? district) {
+      if (district == null) return false;
+      if (selectedState == null) return false;
+      if (!stateDistrictMap.containsKey(selectedState)) return false;
+
+      return stateDistrictMap[selectedState]!.any((d) =>
+      d["en"] == district || d["hi"] == district);
+    }
+
     // 🔵 STATE - DISTRICT DATA
     final Map<String, List<Map<String, String>>> stateDistrictMap = {
       "mp": [
@@ -778,56 +799,133 @@
         {"en": "Raisen", "hi": "रायसेन"},
       ],
     };
-  
+
+    @override
+    void initState() {
+      super.initState();
+      _loadExistingData(); // 🔥 Load existing data for edit
+    }
+
+    // 🔥 LOAD EXISTING USER DATA
+    // 🔥 LOAD EXISTING USER DATA
+    Future<void> _loadExistingData() async {
+      setState(() {
+        isLoading = true;
+        isEditMode = true;
+      });
+
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        setState(() {
+          isLoading = false;
+        });
+        return;
+      }
+
+      var doc = await FirebaseFirestore.instance
+          .collection("users")
+          .doc(user.uid)
+          .get();
+
+      if (doc.exists) {
+        var data = doc.data() as Map<String, dynamic>;
+
+        // Fill controllers with existing data
+        nameController.text = data["name"] ?? "";
+        workTypeController.text = data["workType"] ?? "";
+        pinController.text = data["pin"] ?? "";
+
+        existingImageUrl = data["dp"];
+        existingAudioUrl = data["audioUrl"];
+        existingState = data["state"];
+        existingDistrict = data["district"];
+
+        // 🔥 IMPORTANT: Check if state exists in map, otherwise set null
+        String? loadedState = existingState;
+        String? loadedDistrict = existingDistrict;
+
+        // Verify state exists in our map
+        if (loadedState != null && stateDistrictMap.containsKey(loadedState)) {
+          setState(() {
+            selectedState = loadedState;
+          });
+
+          // Verify district exists in this state's districts
+          if (loadedDistrict != null) {
+            bool districtExists = stateDistrictMap[loadedState]!.any((d) =>
+            d["en"] == loadedDistrict || d["hi"] == loadedDistrict);
+
+            if (districtExists) {
+              setState(() {
+                selectedDistrict = loadedDistrict;
+              });
+            } else {
+              setState(() {
+                selectedDistrict = null;
+              });
+            }
+          }
+        } else {
+          // Agar state map mein nahi hai to null set karo
+          setState(() {
+            selectedState = null;
+            selectedDistrict = null;
+          });
+        }
+      }
+
+      setState(() {
+        isLoading = false;
+      });
+    }
+
     // ================= AUDIO RECORD =================
     Future<void> startRecording() async {
       await _recorder.openRecorder();
-  
+
       final dir = await getTemporaryDirectory();
-      String path =
-          "${dir.path}/intro_${DateTime.now().millisecondsSinceEpoch}.aac";
-  
+      String path = "${dir.path}/intro_${DateTime.now().millisecondsSinceEpoch}.aac";
+
       await _recorder.startRecorder(
         toFile: path,
         codec: Codec.aacADTS,
       );
-  
+
       setState(() {
         isRecording = true;
         audioPath = path;
         recordingSeconds = 0;
       });
-  
+
       recordingTimer = Timer.periodic(
         const Duration(seconds: 1),
             (timer) {
-          setState(() {
-            recordingSeconds++;
-          });
+          if (mounted) {
+            setState(() {
+              recordingSeconds++;
+            });
+          }
         },
       );
     }
+
     Future<void> stopRecording() async {
       recordingTimer?.cancel();
-  
       await _recorder.stopRecorder();
-  
       setState(() {
         isRecording = false;
       });
-  
-  
     }
-  
+
     Future<String?> uploadAudio(File file) async {
       try {
         final user = FirebaseAuth.instance.currentUser;
         if (user == null) return null;
-  
+
         final ref = FirebaseStorage.instance
             .ref()
             .child("profile_audio/${user.uid}.m4a");
-  
+
         await ref.putFile(file);
         return await ref.getDownloadURL();
       } catch (e) {
@@ -835,8 +933,7 @@
         return null;
       }
     }
-  
-  
+
     // 📸 PICK IMAGE
     Future<void> pickImage() async {
       try {
@@ -846,15 +943,10 @@
         );
 
         if (pickedFile != null) {
-          print("IMAGE PICKED: ${pickedFile.path}");
-
           setState(() {
             selectedImage = File(pickedFile.path);
           });
-        } else {
-          print("NO IMAGE SELECTED");
         }
-
       } catch (e) {
         print("Image Picker Error: $e");
       }
@@ -862,43 +954,30 @@
 
     Future<String?> uploadImage(File image) async {
       try {
-        print("🚀 UPLOAD START");
-
         final user = FirebaseAuth.instance.currentUser;
-        if (user == null) {
-          print("❌ USER NULL");
-          return null;
-        }
+        if (user == null) return null;
 
         final ref = FirebaseStorage.instance
             .ref()
             .child("profile_images/${user.uid}.jpg");
 
         await ref.putFile(image);
-
-        print("📤 FILE UPLOADED");
-
-        String url = await ref.getDownloadURL();
-
-        print("✅ DOWNLOAD URL: $url");
-
-        return url;
-
+        return await ref.getDownloadURL();
       } catch (e) {
-        print("❌ Upload error: $e");
+        print("Upload error: $e");
         return null;
       }
     }
+
     Future<Position> getUserLocation() async {
-  
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         await Geolocator.openLocationSettings();
         return Future.error("Location off");
       }
-  
+
       LocationPermission permission = await Geolocator.checkPermission();
-  
+
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
       }
@@ -907,56 +986,28 @@
         await Geolocator.openAppSettings();
         return Future.error("Location permission denied");
       }
-  
+
       return await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
       );
     }
 
-    //Future<Position> getUserLocation() async {
-
-     // bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      //if (!serviceEnabled) {
-     //   throw Exception("Location services are disabled.");
-      //}
-
-      //LocationPermission permission = await Geolocator.checkPermission();
-
-      //if (permission == LocationPermission.denied) {
-       // permission = await Geolocator.requestPermission();
-      //}
-
-      //if (permission == LocationPermission.deniedForever) {
-       // throw Exception("Location permission permanently denied.");
-     // }
-
-      //return await Geolocator.getCurrentPosition(
-       // desiredAccuracy: LocationAccuracy.best, // 🔥 CHANGE THIS
-      //);
-   // }
-
-
-// 🔥 YAHAN PASTE KARO (NAYA FUNCTION)
-
-
-
-    // 💾 SAVE PROFILE
-    Future<void> saveProfile() async {
+    // 🔥 UPDATE PROFILE (for edit mode)
+    Future<void> updateProfile() async {
       try {
-  
         if (!_formKey.currentState!.validate()) return;
-  
+
         if (selectedState == null || selectedDistrict == null) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text("राज्य और जिला चुनना आवश्यक है")),
           );
           return;
         }
-  
+
         setState(() {
           isLoading = true;
         });
-  
+
         final user = FirebaseAuth.instance.currentUser;
         if (user == null) {
           setState(() {
@@ -964,10 +1015,93 @@
           });
           return;
         }
-  
-        /// 🔥 LOCATION GET KARO
-        Position position = await getUserLocation();
 
+        Position position = await getUserLocation();
+        String areaName = await getAreaName(
+          position.latitude,
+          position.longitude,
+        );
+
+        String? finalImageUrl = existingImageUrl;
+        String? finalAudioUrl = existingAudioUrl;
+
+        if (audioPath != null) {
+          finalAudioUrl = await uploadAudio(File(audioPath!));
+        }
+
+        if (selectedImage != null) {
+          finalImageUrl = await uploadImage(selectedImage!);
+        }
+
+        // 🔥 UPDATE user data (not create new)
+        await FirebaseFirestore.instance
+            .collection("users")
+            .doc(user.uid)
+            .update({
+          "name": nameController.text.trim(),
+          "workType": workTypeController.text.trim(),
+          "state": selectedState,
+          "district": selectedDistrict,
+          "pin": pinController.text.trim(),
+          "dp": finalImageUrl ?? existingImageUrl ?? "",
+          "latitude": position.latitude,
+          "longitude": position.longitude,
+          "area": areaName,
+          "audioUrl": finalAudioUrl ?? existingAudioUrl ?? "",
+          "hasIntro": (finalAudioUrl != null || (existingAudioUrl != null && existingAudioUrl!.isNotEmpty)),
+          "updatedAt": FieldValue.serverTimestamp(),
+        });
+
+        setState(() {
+          isLoading = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              t(context, "Profile updated successfully", "प्रोफाइल सफलतापूर्वक अपडेट हो गया"),
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+
+        Navigator.pop(context);
+
+      } catch (e) {
+        setState(() {
+          isLoading = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $e")),
+        );
+      }
+    }
+
+    // 🔥 SAVE PROFILE (for new user)
+    Future<void> saveProfile() async {
+      try {
+        if (!_formKey.currentState!.validate()) return;
+
+        if (selectedState == null || selectedDistrict == null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("राज्य और जिला चुनना आवश्यक है")),
+          );
+          return;
+        }
+
+        setState(() {
+          isLoading = true;
+        });
+
+        final user = FirebaseAuth.instance.currentUser;
+        if (user == null) {
+          setState(() {
+            isLoading = false;
+          });
+          return;
+        }
+
+        Position position = await getUserLocation();
         String areaName = await getAreaName(
           position.latitude,
           position.longitude,
@@ -982,78 +1116,87 @@
 
         if (selectedImage != null) {
           finalImageUrl = await uploadImage(selectedImage!);
-
-          print("🔥 FINAL IMAGE URL: $finalImageUrl");
-
-          if (finalImageUrl == null) {
-            print("⚠️ Upload failed, saving without DP");
-          }
         }
-        await FirebaseFirestore.instance
-            .collection("users")
-            .doc(user.uid)
-            .set({
+
+        WriteBatch batch = FirebaseFirestore.instance.batch();
+
+        DocumentReference userRef = FirebaseFirestore.instance.collection("users").doc(user.uid);
+        DocumentReference txnRef = FirebaseFirestore.instance.collection("transactions").doc();
+
+        batch.set(userRef, {
           "name": nameController.text.trim(),
           "phone": user.phoneNumber ?? "",
           "role": widget.role,
           "workType": workTypeController.text.trim(),
           "state": selectedState,
           "district": selectedDistrict,
-          //"area": areaController.text.trim(),
           "pin": pinController.text.trim(),
           "dp": finalImageUrl ?? "",
-  
-          // 🔥 IMPORTANT DEFAULT FIELDS
-          "wallet": 0,
+          "wallet": 50,
+          "welcomeBonusGiven": true,
           "isFirstJobFreeUsed": false,
           "totalJobs": 0,
           "totalEarned": 0,
           "isAvailable": true,
-
-
-  
-          // ⭐ RATING SYSTEM DEFAULT
           "rating": 0.0,
           "totalRatings": 0,
-  
           "latitude": position.latitude,
           "longitude": position.longitude,
           "area": areaName,
-  
-          "createdAt": Timestamp.now(),
-  
+          "createdAt": FieldValue.serverTimestamp(),
           "audioUrl": finalAudioUrl ?? "",
           "hasIntro": finalAudioUrl != null,
         });
-  
+
+        batch.set(txnRef, {
+          "userId": user.uid,
+          "amount": 50,
+          "type": "credit",
+          "reason": "Welcome Bonus",
+          "createdAt": FieldValue.serverTimestamp(),
+        });
+
+        await batch.commit();
         setState(() {
           isLoading = false;
         });
-  
+
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
             builder: (context) => DashboardScreen(role: widget.role),
           ),
         );
-  
+
       } catch (e) {
-  
         setState(() {
           isLoading = false;
         });
-  
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("Error: $e")),
         );
       }
     }
+
     @override
     Widget build(BuildContext context) {
+      // Agar edit mode mein data load ho raha hai to loading show karo
+      if (isEditMode && isLoading) {
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(t(context, "Edit Profile", "प्रोफाइल संपादित करें")),
+            backgroundColor: Colors.green,
+          ),
+          body: const Center(child: CircularProgressIndicator()),
+        );
+      }
+
       return Scaffold(
         appBar: AppBar(
           title: Text(
-            t(context, "Profile Setup", "प्रोफाइल सेटअप"),
+            isEditMode
+                ? t(context, "Edit Profile", "प्रोफाइल संपादित करें")
+                : t(context, "Profile Setup", "प्रोफाइल सेटअप"),
           ),
           backgroundColor: Colors.green,
         ),
@@ -1064,36 +1207,46 @@
             child: SingleChildScrollView(
               child: Column(
                 children: [
-  
                   const SizedBox(height: 20),
-  
+
                   Text(
-                    "Selected Role: ${widget.role}",
+                    "Role: ${widget.role == 'worker' ? 'मज़दूर' : 'ठेकेदार'}",
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
                       color: Colors.green,
                     ),
                   ),
-  
+
                   const SizedBox(height: 30),
-  
-                  // 📸 DP
+
+                  // 📸 DP with existing image support
+                  // 📸 DP with existing image support
                   GestureDetector(
                     onTap: pickImage,
                     child: CircleAvatar(
                       radius: 60,
                       backgroundColor: Colors.grey.shade300,
-                      backgroundImage:
-                      selectedImage != null ? FileImage(selectedImage!) : null,
-                      child: selectedImage == null
+                      backgroundImage: selectedImage != null
+                          ? FileImage(selectedImage!) as ImageProvider
+                          : (existingImageUrl != null && existingImageUrl!.isNotEmpty
+                          ? NetworkImage(existingImageUrl!) as ImageProvider
+                          : null),
+                      child: (selectedImage == null && (existingImageUrl == null || existingImageUrl!.isEmpty))
                           ? const Icon(Icons.camera_alt, size: 40)
                           : null,
                     ),
                   ),
-  
+
+                  const SizedBox(height: 10),
+                  Text(
+                    t(context, "Tap to change photo", "फोटो बदलने के लिए टैप करें"),
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+
                   const SizedBox(height: 30),
 
+                  // 🎤 Audio Record
                   GestureDetector(
                     onLongPressStart: (_) => startRecording(),
                     onLongPressEnd: (_) => stopRecording(),
@@ -1106,11 +1259,7 @@
                       child: Center(
                         child: isRecording
                             ? Text(
-                          t(
-                            context,
-                            "Recording... $recordingSeconds s",
-                            "रिकॉर्डिंग... $recordingSeconds सेकंड",
-                          ),
+                          t(context, "Recording... $recordingSeconds s", "रिकॉर्डिंग... $recordingSeconds सेकंड"),
                           style: const TextStyle(color: Colors.white),
                         )
                             : Row(
@@ -1119,11 +1268,9 @@
                             const Icon(Icons.mic, color: Colors.white),
                             const SizedBox(width: 8),
                             Text(
-                              t(
-                                context,
-                                "Hold to Record Intro",
-                                "इंट्रो रिकॉर्ड करने के लिए दबाकर रखें",
-                              ),
+                              existingAudioUrl != null && existingAudioUrl!.isNotEmpty
+                                  ? t(context, "Hold to re-record Intro", "इंट्रो री-रिकॉर्ड करें")
+                                  : t(context, "Hold to Record Intro", "इंट्रो रिकॉर्ड करने के लिए दबाकर रखें"),
                               style: const TextStyle(color: Colors.white),
                             ),
                           ],
@@ -1131,102 +1278,91 @@
                       ),
                     ),
                   ),
-  
-                  buildField("पूरा नाम", nameController),
-  
+
+                  // 🎵 Play existing audio button
+                  if (existingAudioUrl != null && existingAudioUrl!.isNotEmpty && !isRecording)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: TextButton.icon(
+                        onPressed: () async {
+                          final player = AudioPlayer();
+                          await player.setUrl(existingAudioUrl!);
+                          player.play();
+                        },
+                        icon: const Icon(Icons.play_arrow),
+                        label: Text(t(context, "Play existing intro", "पुराना इंट्रो सुनें")),
+                      ),
+                    ),
+
+                  const SizedBox(height: 20),
+
+                  buildField(t(context, "Full Name", "पूरा नाम"), nameController),
+
                   buildField(
-                    widget.role == "मज़दूर"
-                        ? "आप कौन सा काम करते हैं?"
-                        : "आप किस प्रकार का काम देते हैं?",
+                    widget.role == "worker"
+                        ? t(context, "What work do you do?", "आप कौन सा काम करते हैं?")
+                        : t(context, "What type of work do you provide?", "आप किस प्रकार का काम देते हैं?"),
                     workTypeController,
                   ),
-  
+
                   // 🔽 STATE DROPDOWN
+                  // 🔽 STATE DROPDOWN
+                  // 🔽 DISTRICT DROPDOWN (FIXED)
                   DropdownButtonFormField<String>(
-                    value: selectedState,
-                    hint: Text(
-                      t(context, "Select State", "राज्य चुनें"),
-                    ),
-                    items: stateDistrictMap.keys.map((state) {
-                      return DropdownMenuItem(
-                        value: state,
-                        child: Text(state), // abhi ok hai (later improve karenge)
-                      );
-                    }).toList(),
-                    onChanged: (value) {
-                      setState(() {
-                        selectedState = value;
-                        selectedDistrict = null;
-                      });
-                    },
-                    validator: (value) => value == null
-                        ? t(context, "State is required", "राज्य चुनना आवश्यक है")
+                    value: selectedDistrict != null && _isValidDistrict(selectedDistrict)
+                        ? selectedDistrict
                         : null,
-                  ),
-  
-                  const SizedBox(height: 20),
-  
-                  // 🔽 DISTRICT DROPDOWN
-                  DropdownButtonFormField<String>(
-                    value: selectedDistrict,
-                    hint: Text(
-                      t(context, "Select District", "जिला चुनें"),
-                    ),
-                    items: (selectedState != null
+                    hint: Text(t(context, "Select District", "जिला चुनें")),
+                    items: (selectedState != null && stateDistrictMap.containsKey(selectedState)
                         ? stateDistrictMap[selectedState] ?? []
                         : [])
                         .map<DropdownMenuItem<String>>((districtMap) {
-
-                      String districtName =
-                      Localizations.localeOf(context).languageCode == 'hi'
+                      // 🔥 VALUE = ENGLISH (hamesha)
+                      String districtValue = districtMap["en"]!;
+                      // 🔥 DISPLAY = Hindi ya English
+                      String displayName = Localizations.localeOf(context).languageCode == 'hi'
                           ? districtMap["hi"]!
                           : districtMap["en"]!;
-
                       return DropdownMenuItem<String>(
-                        value: districtName,
-                        child: Text(districtName),
+                        value: districtValue,  // 🔥 IMPORTANT: English value
+                        child: Text(displayName),
                       );
                     }).toList(),
-
                     onChanged: selectedState == null
-                        ? null // disable dropdown
+                        ? null
                         : (value) {
                       setState(() {
-                        selectedDistrict = value;
+                        selectedDistrict = value;  // 🔥 value English mein store hoga
                       });
                     },
                     validator: (value) => value == null
                         ? t(context, "District is required", "जिला चुनना आवश्यक है")
                         : null,
                   ),
-  
                   const SizedBox(height: 20),
-
-                  //buildField(
-                    //t(context, "Area", "क्षेत्र"),
-                    //areaController,
-                  //),
 
                   buildField(
                     t(context, "PIN Code", "पिन कोड"),
                     pinController,
                     keyboard: TextInputType.number,
                   ),
+
                   const SizedBox(height: 30),
-  
+
                   isLoading
                       ? const CircularProgressIndicator()
                       : ElevatedButton(
-                    onPressed: saveProfile,
+                    onPressed: isEditMode ? updateProfile : saveProfile,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.green,
-                      minimumSize:
-                      const Size(double.infinity, 50),
+                      minimumSize: const Size(double.infinity, 50),
                     ),
                     child: Text(
-                      t(context, "Save & Continue", "सेव करें और आगे बढ़ें"),
+                      isEditMode
+                          ? t(context, "Update Profile", "प्रोफाइल अपडेट करें")
+                          : t(context, "Save & Continue", "सेव करें और आगे बढ़ें"),
                     ),
-                  )
+                  ),
                 ],
               ),
             ),
@@ -1234,7 +1370,7 @@
         ),
       );
     }
-  
+
     Widget buildField(String hint, TextEditingController controller,
         {TextInputType keyboard = TextInputType.text}) {
       return Padding(
@@ -1244,11 +1380,7 @@
           keyboardType: keyboard,
           validator: (value) {
             if (value == null || value.isEmpty) {
-              return t(
-                context,
-                "This field cannot be empty",
-                "यह फील्ड खाली नहीं हो सकता",
-              );
+              return t(context, "This field cannot be empty", "यह फील्ड खाली नहीं हो सकता");
             }
             return null;
           },
@@ -1261,30 +1393,30 @@
         ),
       );
     }
-  
+
     @override
     void dispose() {
-  
+
       recordingTimer?.cancel();
       nameController.dispose();
       workTypeController.dispose();
-      //areaController.dispose();
       pinController.dispose();
+      _recorder.closeRecorder();
       super.dispose();
     }
   }
-  
-  
+
   //============== DashboardScreen=============
   class DashboardScreen extends StatefulWidget {
     final String role;
     const DashboardScreen({super.key, required this.role});
-  
+
     @override
     State<DashboardScreen> createState() => _DashboardScreenState();
   }
-  
+
   class _DashboardScreenState extends State<DashboardScreen> {
+
 
     bool isProcessing = false;
 
@@ -1298,6 +1430,9 @@
     bool isRecordingDashboard = false;
     int recordSeconds = 0;
     Timer? recordTimer;
+
+    late StreamSubscription<Position> _positionStream;
+    bool _isLocationTracking = false;
 
     Future<void> loadAudioUrl() async {
       try {
@@ -1313,6 +1448,8 @@
         print("Error loading audioUrl: $e");
       }
     }
+
+
 
     Future<String?> uploadDashboardAudio(File file) async {
       try {
@@ -1344,6 +1481,45 @@
       }
     }
 
+    // 🔥 यह पूरा function copy-paste करें
+    void _startLocationTracking() {
+      const LocationSettings locationSettings = LocationSettings(
+        accuracy: LocationAccuracy.best,
+        distanceFilter: 100,
+      );
+
+      _positionStream = Geolocator.getPositionStream(
+        locationSettings: locationSettings,
+      ).listen((Position position) async {
+        if (!_isLocationTracking) {
+          _isLocationTracking = true;
+
+          String uid = FirebaseAuth.instance.currentUser!.uid;
+          String areaName = await getAreaName(position.latitude, position.longitude);
+
+          await FirebaseFirestore.instance
+              .collection("users")
+              .doc(uid)
+              .update({
+            "latitude": position.latitude,
+            "longitude": position.longitude,
+            "area": areaName,
+            "lastLocationUpdate": FieldValue.serverTimestamp(),
+          });
+
+          if (mounted) {
+            setState(() {
+              area = areaName;
+            });
+          }
+
+          print("📍 Location updated: $areaName");
+          _isLocationTracking = false;
+        }
+      }, onError: (error) {  // 🔥 यहाँ onError डालें (listen के अंदर)
+        print("❌ Location stream error: $error");
+      });
+    }
 
 
     Future<void> startDashboardRecording() async {
@@ -1564,7 +1740,7 @@
     bool isDetailOpen = false;
 
     final AudioPlayer ringtonePlayer = AudioPlayer();
-  
+
     // Variables jo data store karenge
     String name = "Loading...";
     String dp = "";
@@ -1614,6 +1790,8 @@
 
     }
 
+
+
     @override
     void initState() {
       super.initState();
@@ -1631,6 +1809,32 @@
       listenBothPaymentComplete();
 
       listenSenderUpdates();
+    }
+
+    Future<void> addMoneyToWallet(int amount) async {
+      String uid = FirebaseAuth.instance.currentUser!.uid;
+
+      DocumentReference userRef =
+      FirebaseFirestore.instance.collection("users").doc(uid);
+
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        DocumentSnapshot snapshot = await transaction.get(userRef);
+
+        int currentWallet =
+            (snapshot.data() as Map<String, dynamic>)["wallet"] ?? 0;
+
+        transaction.update(userRef, {
+          "wallet": currentWallet + amount,
+        });
+      });
+
+      setState(() {
+        wallet += amount; // 🔥 UI update
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("₹$amount added successfully")),
+      );
     }
 
     void listenBothPaymentComplete() {
@@ -1952,12 +2156,12 @@
         ),
       );
     }
-  
+
     Future<void> saveFCMToken() async {
-  
+
       String? token =
       await FirebaseMessaging.instance.getToken();
-  
+
       if (token != null) {
         await FirebaseFirestore.instance
             .collection("users")
@@ -1989,6 +2193,11 @@
       }
     }
     void showHireDialog(String requestId) async {
+
+      bool hasVibrator = await Vibration.hasVibrator();
+      if (hasVibrator) {
+        Vibration.vibrate(pattern: [500, 500, 500, 500, 500], repeat: 0);
+      }
 
       await ringtonePlayer.setAsset("assets/sounds/ringtone.mp3");
       ringtonePlayer.setLoopMode(LoopMode.one);
@@ -2063,6 +2272,7 @@
 
                     timer.cancel();
                     requestTimer = null;
+                    Vibration.cancel();
 
                     await ringtonePlayer.stop();
 
@@ -2247,6 +2457,7 @@
                             Expanded(
                               child: ElevatedButton.icon(
                                 onPressed: () async {
+                                  Vibration.cancel();
 
                                   requestTimer?.cancel();
                                   requestTimer = null;
@@ -2282,6 +2493,7 @@
                             Expanded(
                               child: ElevatedButton.icon(
                                 onPressed: () async {
+                                  Vibration.cancel();
 
                                   requestTimer?.cancel();
                                   requestTimer = null;
@@ -2482,7 +2694,17 @@
 
                               try {
 
-                                String currentUserId = FirebaseAuth.instance.currentUser!.uid;
+                                // ✅ SAFE USER FETCH
+                                final user = FirebaseAuth.instance.currentUser;
+
+                                if (user == null) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text("User not logged in")),
+                                  );
+                                  return;
+                                }
+
+                                String currentUserId = user.uid;
 
                                 // 🔥 USER DATA FETCH
                                 DocumentSnapshot userDoc = await FirebaseFirestore.instance
@@ -2493,11 +2715,7 @@
                                 Map<String, dynamic> userData =
                                 (userDoc.data() ?? {}) as Map<String, dynamic>;
 
-                                bool isFirstFreeUsed =
-                                    userData["isFirstJobFreeUsed"] ?? false;
-
-                                // 🔥 BACKEND PROTECTION (DUPLICATE PAYMENT STOP)
-
+                                // 🔥 REQUEST CHECK (duplicate payment stop)
                                 DocumentSnapshot requestDoc = await FirebaseFirestore.instance
                                     .collection("hireRequests")
                                     .doc(data["id"])
@@ -2512,17 +2730,21 @@
                                   return;
                                 }
 
-                                /// 🎁 FREE MODE (NO PAYMENT)
+                                // 🔥 WALLET + COMMISSION
 
 
 
-                                /// ✅ REQUEST UPDATE
+                                await processHireWithCommission(
+                                  user1Id: data["senderId"],
+                                  user2Id: currentUserId,
+                                );
+
+                                // 🔥 REQUEST UPDATE
                                 await FirebaseFirestore.instance
                                     .collection("hireRequests")
                                     .doc(data["id"])
                                     .update({
                                   "receiverPaid": true,
-                                  "senderPaid": true,
                                 });
 
                                 Navigator.of(dialogContext).pop();
@@ -2531,11 +2753,7 @@
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text(
-                                      t(
-                                        context,
-                                        "Connection successful",
-                                        "संपर्क सफल हुआ",
-                                      ),
+                                      t(context, "Connection successful", "संपर्क सफल हुआ"),
                                     ),
                                   ),
                                 );
@@ -2575,11 +2793,7 @@
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text(
-                                      t(
-                                        context,
-                                        "Something went wrong",
-                                        "कुछ गलत हो गया",
-                                      ),
+                                      t(context, "Something went wrong", "कुछ गलत हो गया"),
                                     ),
                                   ),
                                 );
@@ -2703,14 +2917,14 @@
         print("❌ Location error: $e");
       }
     }
-  
-  
+
+
     // ================= NEARBY JOBS METHOD =================
     Widget _buildNearbyJobs() {
       return StreamBuilder<List<Map<String, dynamic>>>(
         stream: _getNearbyJobsStream(),
         builder: (context, snapshot) {
-  
+
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
@@ -2726,7 +2940,7 @@
               ),
             );
           }
-  
+
           var workers = snapshot.data!;
 
           return SizedBox(
@@ -2763,65 +2977,102 @@
       required String user2Id,
     }) async {
 
-      // 🔥 FREE MODE CONTROL (बस यही add किया है)
-      bool isFreeMode = true;
-
-      if (isFreeMode) {
-        return; // 🚀 payment skip
-      }
-
-      const int commission = 5;
-
       await FirebaseFirestore.instance.runTransaction((transaction) async {
+
+        const int commission = 5;
 
         DocumentReference user1Ref =
         FirebaseFirestore.instance.collection("users").doc(user1Id);
+
+        DocumentReference user2Ref =
+        FirebaseFirestore.instance.collection("users").doc(user2Id);
 
         DocumentReference adminRef =
         FirebaseFirestore.instance.collection("admin").doc("main");
 
         DocumentSnapshot user1Snap = await transaction.get(user1Ref);
+        DocumentSnapshot user2Snap = await transaction.get(user2Ref);
         DocumentSnapshot adminSnap = await transaction.get(adminRef);
 
-        int user1Wallet =
-            (user1Snap.data() as Map<String, dynamic>?)?["wallet"] ?? 0;
-        bool user1FreeUsed =
-            (user1Snap.data() as Map<String, dynamic>?)?["isFirstJobFreeUsed"] ?? false;
-        int adminWallet = adminSnap["wallet"] ?? 0;
+        // ✅ USER 1
+        Map<String, dynamic> user1Data =
+            user1Snap.data() as Map<String, dynamic>? ?? {};
+        int user1Wallet = user1Data["wallet"] ?? 0;
 
-        int totalCommission = 0;
+        // ✅ USER 2
+        Map<String, dynamic> user2Data =
+            user2Snap.data() as Map<String, dynamic>? ?? {};
+        int user2Wallet = user2Data["wallet"] ?? 0;
 
-        // 🔥 ONLY CURRENT USER (user1)
-        if (!user1FreeUsed) {
+        // ✅ ADMIN
+        Map<String, dynamic> adminData =
+            adminSnap.data() as Map<String, dynamic>? ?? {};
+        int adminWallet = adminData["wallet"] ?? 0;
 
-          // 🎁 FIRST JOB FREE
-          transaction.update(user1Ref, {
-            "isFirstJobFreeUsed": true,
-          });
-
-        } else {
-
-          // 💰 NORMAL PAYMENT
-          if (user1Wallet < commission) {
-            throw Exception("₹5 Balance Required");
-          }
-
-          transaction.update(user1Ref, {
-            "wallet": user1Wallet - commission,
-          });
-
-          totalCommission += commission;
+        // 🔥 CHECK BOTH
+        if (user1Wallet < commission) {
+          throw Exception("Recharge Required");
         }
 
-        // 🔥 ADMIN
-        if (totalCommission > 0) {
-          transaction.update(adminRef, {
-            "wallet": adminWallet + totalCommission,
-            "totalEarning": FieldValue.increment(totalCommission),
-          });
+        if (user2Wallet < commission) {
+          throw Exception("Recharge Required");
         }
+
+        // 💰 CUT BOTH
+        transaction.update(user1Ref, {
+          "wallet": user1Wallet - commission,
+        });
+
+        transaction.update(user2Ref, {
+          "wallet": user2Wallet - commission,
+        });
+
+        // 🔥 TRANSACTION LOG USER 1
+        transaction.set(
+          FirebaseFirestore.instance.collection("transactions").doc(),
+          {
+            "userId": user1Id,
+            "amount": commission,
+            "type": "debit",
+            "reason": "Hire Commission",
+            "createdAt": FieldValue.serverTimestamp(),
+          },
+        );
+
+// 🔥 TRANSACTION LOG USER 2
+        transaction.set(
+          FirebaseFirestore.instance.collection("transactions").doc(),
+          {
+            "userId": user2Id,
+            "amount": commission,
+            "type": "debit",
+            "reason": "Hire Commission",
+            "createdAt": FieldValue.serverTimestamp(),
+          },
+        );
+
+// 🔥 ADMIN LOG
+        transaction.set(
+          FirebaseFirestore.instance.collection("transactions").doc(),
+          {
+            "userId": "admin",
+            "amount": commission * 2,
+            "type": "credit",
+            "reason": "Commission Earned",
+            "createdAt": FieldValue.serverTimestamp(),
+          },
+        );
+
+        // 🔥 ADMIN ADD
+        transaction.set(adminRef, {
+          "wallet": adminWallet + (commission * 2),
+          "totalEarning": FieldValue.increment(commission * 2),
+        }, SetOptions(merge: true));
       });
     }
+
+
+
     Stream<List<Map<String, dynamic>>> _getNearbyJobsStream() async* {
 
       final user = FirebaseAuth.instance.currentUser;
@@ -2830,23 +3081,36 @@
         return;
       }
 
+      // 🔥 USER DATA FETCH
       var userDoc = await FirebaseFirestore.instance
           .collection("users")
           .doc(user.uid)
           .get();
-  
+
       if (!userDoc.exists) {
         yield [];
         return;
       }
 
-      Position currentPosition = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.best,
-      );
+      String userDistrict = userDoc["district"] ?? "";
+      String userState = userDoc["state"] ?? "";
+
+      // 🔥 CURRENT LOCATION
+      Position currentPosition;
+      try {
+        currentPosition = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.best,
+        );
+      } catch (e) {
+        print("Location error: $e");
+        yield [];
+        return;
+      }
 
       double userLat = currentPosition.latitude;
       double userLng = currentPosition.longitude;
 
+      // 🔥 ROLE LOGIC
       String role = widget.role.toString().trim();
 
       String targetRole =
@@ -2854,10 +3118,13 @@
           ? "employer"
           : "worker";
 
+      // 🔥 FIREBASE STREAM
       yield* FirebaseFirestore.instance
           .collection("users")
           .where("role", isEqualTo: targetRole)
           .where("isAvailable", isEqualTo: true)
+          .where("state", isEqualTo: userState)       // 🔥 NEW (IMPORTANT)
+          .where("district", isEqualTo: userDistrict) // 🔥 KEEP
           .snapshots()
           .asyncMap((snapshot) async {
 
@@ -2865,27 +3132,34 @@
 
         for (var doc in snapshot.docs) {
 
+          // ❌ खुद को skip करो
           if (doc.id == user.uid) continue;
 
           var data = doc.data() as Map<String, dynamic>;
-
-          print("FILTER ROLE: ${widget.role}");
-          print("DOC ROLE: ${data["role"]}");
 
           data["id"] = doc.id;
 
           double workerLat = (data["latitude"] ?? 0).toDouble();
           double workerLng = (data["longitude"] ?? 0).toDouble();
 
-          double distance = Geolocator.distanceBetween(
-              userLat, userLng, workerLat, workerLng);
+          // ❌ अगर location missing है तो skip
+          if (workerLat == 0 || workerLng == 0) continue;
 
-          if (distance <= 10000 ) {
+          double distance = Geolocator.distanceBetween(
+            userLat,
+            userLng,
+            workerLat,
+            workerLng,
+          );
+
+          // 🔥 MAIN FILTER (10 KM)
+          if (distance <= 10000) {
             data["distance"] = distance;
             nearbyWorkers.add(data);
           }
         }
 
+        // 🔥 SORT (nearest first)
         nearbyWorkers.sort(
               (a, b) => a["distance"].compareTo(b["distance"]),
         );
@@ -2899,7 +3173,7 @@
     Widget build(BuildContext context) {
       return Scaffold(
         backgroundColor: const Color(0xFFF2F2F2),
-  
+
         // ================= SIDE DRAWER (Wallet shift yahan kiya hai) =================
         drawer: _buildDrawer(context),
 
@@ -2915,7 +3189,7 @@
             ),
           ),
         ),
-  
+
         body: SafeArea(
           child: SingleChildScrollView(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
@@ -2924,15 +3198,15 @@
               children: [
                 // ================= PROFILE HEADER =================
                 _buildCompactProfile(),
-  
+
                 const SizedBox(height: 15),
-  
+
                 // ================= BANNER PLACEHOLDER (Balance/Trans ki jagah) =================
                 _buildBannerSlider(),
-  
+
                 const SizedBox(height: 15),
-  
-  
+
+
                 // ================= NAV BUTTONS =================
                 Wrap(
                   spacing: 10,
@@ -2949,6 +3223,8 @@
                         );
                       },
                     ),
+
+
 
                     _smallNavButton(
                       Icons.business,
@@ -2977,11 +3253,11 @@
                     ),
                   ],
                 ),
-  
-  
+
+
                 const SizedBox(height: 18),
-  
-  
+
+
                 // ================= NEARBY JOBS =================
                 _smallSectionHeader(
                   t(context, "Nearby Jobs", "नज़दीकी काम"),
@@ -3018,10 +3294,10 @@
         ),
       );
     }
-  
+
     // --- Drawer Widget (Wallet Option Yahan Hai) ---
     Widget _buildDrawer(BuildContext context) {
-  
+
       String uid = FirebaseAuth.instance.currentUser!.uid;
 
       return Drawer(
@@ -3120,16 +3396,11 @@
                       ),
                     ),
                     onTap: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            t(
-                              context,
-                              "Wallet coming soon",
-                              "वॉलेट सुविधा जल्द आ रही है",
-                            ),
-                          ),
-                        ),
+                      Navigator.pop(context); // 🔥 MUST
+
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => WalletScreen()),
                       );
                     },
                   ),
@@ -3169,35 +3440,6 @@
                         ),
 
 
-
-                      _drawerTile(
-                        Icons.bar_chart,
-                        t(context, "Earnings Report", "कमाई रिपोर्ट"),
-                            () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const EarningsReportScreen(),
-                            ),
-                          );
-                        },
-                      ),
-
-                      const Divider(),
-
-                      _drawerTile(
-                        Icons.work,
-                        t(context, "My Jobs", "मेरे काम"),
-                            () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const MyJobsScreen(),
-                            ),
-                          );
-                        },
-                      ),
-
                       _drawerTile(
                         Icons.history,
                         t(context, "Hire History", "भर्ती इतिहास"),
@@ -3211,51 +3453,27 @@
                         },
                       ),
 
-
-
-                      const Divider(),
-
-                      _drawerTile(
-                        Icons.star,
-                        t(context, "My Ratings", "मेरी रेटिंग"),
-                            () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const MyRatingsScreen(),
-                            ),
-                          );
-                        },
-                      ),
-
-                      _drawerTile(
-                        Icons.workspace_premium,
-                        t(context, "Premium Badge", "प्रीमियम बैज"),
-                            () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const PremiumScreen(),
-                            ),
-                          );
-                        },
-                      ),
-
                       const Divider(),
 
                       _drawerTile(
                         Icons.settings,
                         t(context, "Settings", "सेटिंग्स"),
-                            () {},
-                      ),
-
-                      _drawerTile(
-                        Icons.language,
-                        t(context, "Language", "भाषा"),
                             () {
-                          showLanguageDialog(context);
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => SettingsScreen(
+                                onLanguageChange: (langCode) {
+                                  // 🔥 यहाँ language change करो
+                                  (context.findAncestorStateOfType<_MyAppState>())
+                                      ?.changeLanguage(langCode);
+                                },
+                              ),
+                            ),
+                          );
                         },
                       ),
+
 
                       _drawerTile(Icons.logout, "Logout", () async {
 
@@ -3287,6 +3505,7 @@
         ),
       );
     }
+
     Widget _drawerTile(IconData icon, String title,
         VoidCallback onTap,
         {bool isLogout = false}) {
@@ -3352,23 +3571,23 @@
     }
 
 
-  
+
     // --- Banner Placeholder (Upar wale dono card hata kar ye lagaya hai) ---
     Widget _buildBannerSlider() {
       return SizedBox(
         height: 150,
         child: PageView(
           children: [
-  
+
             _bannerImage("assets/images/banner1.png"),
             _bannerImage("assets/images/banner2.png"),
-            _bannerImage("assets/images/banner3.png"),
-  
+            _bannerImage("assets/images/banner1.png"),
+
           ],
         ),
       );
     }
-  
+
     Widget _bannerImage(String imagePath) {
       return Container(
         margin: const EdgeInsets.symmetric(horizontal: 5),
@@ -3381,7 +3600,7 @@
         ),
       );
     }
-  
+
     // --- Profile Header ---
     Widget _buildCompactProfile() {
       return Container(
@@ -3514,14 +3733,14 @@
         ),
       );
     }
-  
+
     Future<void> toggleAvailability() async {
       String uid = FirebaseAuth.instance.currentUser!.uid;
-  
+
       setState(() {
         isAvailable = !isAvailable;
       });
-  
+
       await FirebaseFirestore.instance
           .collection("users")
           .doc(uid)
@@ -3607,7 +3826,7 @@
         ],
       );
     }
-  
+
     Widget _compactJobScroll(List<Widget> items) {
       return SingleChildScrollView(
         scrollDirection: Axis.horizontal,
@@ -3615,7 +3834,7 @@
         child: Row(children: items),
       );
     }
-  
+
     Widget _compactJobItem(String title, String loc, String price, int stars) {
       return Container(
         width: 185,
@@ -3649,123 +3868,141 @@
       );
     }
   }
-  
-  
+
+
   //================= MAJDOOR LIST =================
-  
+
   class MajdoorListScreen extends StatefulWidget {
     const MajdoorListScreen({super.key});
-  
+
     @override
     State<MajdoorListScreen> createState() => _MajdoorListScreenState();
   }
-  
+
   class _MajdoorListScreenState extends State<MajdoorListScreen> {
-  
-    // 🔥 ₹5 + ₹5 Commission System
+
+    final AudioPlayer audioPlayer = AudioPlayer();
+
+    // 🔥 नया function: सिर्फ 10 KM के अंदर वाले मजदूर लाने के लिए
+    Stream<List<QueryDocumentSnapshot>> _getNearbyWorkersStream() async* {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        yield [];
+        return;
+      }
+
+      // अपनी current location लो
+      Position currentPosition;
+      try {
+        currentPosition = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.best,
+        );
+      } catch (e) {
+        print("Location error: $e");
+        yield [];
+        return;
+      }
+
+      double userLat = currentPosition.latitude;
+      double userLng = currentPosition.longitude;
+
+      // सारे available मजदूर लो
+      QuerySnapshot snapshot = await FirebaseFirestore.instance
+          .collection("users")
+          .where("role", isEqualTo: "worker")
+          .where("isAvailable", isEqualTo: true)
+          .get();
+
+      List<QueryDocumentSnapshot> nearbyWorkers = [];
+
+      for (var doc in snapshot.docs) {
+        // अपने आप को skip करो
+        if (doc.id == user.uid) continue;
+
+        var data = doc.data() as Map<String, dynamic>;
+        double workerLat = (data["latitude"] ?? 0).toDouble();
+        double workerLng = (data["longitude"] ?? 0).toDouble();
+
+        // अगर location missing है तो skip
+        if (workerLat == 0 || workerLng == 0) continue;
+
+        double distance = Geolocator.distanceBetween(
+          userLat,
+          userLng,
+          workerLat,
+          workerLng,
+        );
+
+        // 🔥 MAIN FILTER: सिर्फ 10 KM के अंदर वाले
+        if (distance <= 10000) {
+          // दूरी data में add करो (UI में दिखाने के लिए)
+          data["distance"] = distance;
+          nearbyWorkers.add(doc);
+        }
+      }
+
+      // नजदीक वाले पहले दिखें
+      nearbyWorkers.sort((a, b) {
+        double distA = (a.data() as Map<String, dynamic>)["distance"] ?? 0;
+        double distB = (b.data() as Map<String, dynamic>)["distance"] ?? 0;
+        return distA.compareTo(distB);
+      });
+
+      yield nearbyWorkers;
+    }
+
+    Future<void> playAudio(String url) async {
+      try {
+        await audioPlayer.setUrl(url);
+        audioPlayer.play();
+      } catch (e) {
+        print("Audio error: $e");
+      }
+    }
+
+    // 🔥 ₹5 Commission System (आपका original code)
     Future<void> processHireWithCommission({
       required String user1Id,
       required String user2Id,
     }) async {
-
-      // 🔥 FREE MODE CONTROL (बस यही add किया है)
-      bool isFreeMode = true;
-
-      if (isFreeMode) {
-        return; // 🚀 payment skip
-      }
-
       const int commission = 5;
-
       await FirebaseFirestore.instance.runTransaction((transaction) async {
-
-        DocumentReference user1Ref =
-        FirebaseFirestore.instance.collection("users").doc(user1Id);
-
-        DocumentReference adminRef =
-        FirebaseFirestore.instance.collection("admin").doc("main");
-
+        DocumentReference user1Ref = FirebaseFirestore.instance.collection("users").doc(user1Id);
+        DocumentReference adminRef = FirebaseFirestore.instance.collection("admin").doc("main");
         DocumentSnapshot user1Snap = await transaction.get(user1Ref);
         DocumentSnapshot adminSnap = await transaction.get(adminRef);
-
-        int user1Wallet =
-            (user1Snap.data() as Map<String, dynamic>?)?["wallet"] ?? 0;
-        bool user1FreeUsed =
-            (user1Snap.data() as Map<String, dynamic>?)?["isFirstJobFreeUsed"] ?? false;
+        int user1Wallet = (user1Snap.data() as Map<String, dynamic>?)?["wallet"] ?? 0;
+        bool user1FreeUsed = (user1Snap.data() as Map<String, dynamic>?)?["isFirstJobFreeUsed"] ?? false;
         int adminWallet = adminSnap["wallet"] ?? 0;
-
         int totalCommission = 0;
-
-        // ================= USER 1 =================
         if (!user1FreeUsed) {
-
           transaction.update(user1Ref, {
             "isFirstJobFreeUsed": true,
           });
-
-          transaction.set(
-            user1Ref.collection("transactions").doc(),
-            {
-              "amount": 0,
-              "type": "info",
-              "message": "First Job Free",
-              "createdAt": Timestamp.now(),
-            },
-          );
-
         } else {
-
           if (user1Wallet < commission) {
             throw Exception("₹5 Balance Required");
           }
-
           transaction.update(user1Ref, {
             "wallet": user1Wallet - commission,
           });
-
-          transaction.set(
-            user1Ref.collection("transactions").doc(),
-            {
-              "amount": commission,
-              "type": "debit",
-              "message": "Platform Fee",
-              "createdAt": Timestamp.now(),
-            },
-          );
-
           totalCommission += commission;
         }
-
-        // ================= ADMIN =================
         if (totalCommission > 0) {
-
           transaction.update(adminRef, {
             "wallet": adminWallet + totalCommission,
             "totalEarning": FieldValue.increment(totalCommission),
           });
-
-          transaction.set(
-            adminRef.collection("transactions").doc(),
-            {
-              "amount": totalCommission,
-              "type": "credit",
-              "message": "Platform Commission",
-              "createdAt": Timestamp.now(),
-            },
-          );
         }
       });
     }
 
     @override
     Widget build(BuildContext context) {
-  
-      String currentUserId =
-          FirebaseAuth.instance.currentUser!.uid;
-  
+      String currentUserId = FirebaseAuth.instance.currentUser!.uid;
+
       return Scaffold(
         backgroundColor: const Color(0xFFF2F2F2),
-
         appBar: AppBar(
           title: const Text("मजदूर लिस्ट",
               style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
@@ -3773,68 +4010,49 @@
           elevation: 0,
           iconTheme: const IconThemeData(color: Colors.black),
         ),
-
-        body: StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection("users")
-              .where("role", isEqualTo: "worker")
-              .where("isAvailable", isEqualTo: true)
-              .snapshots(),
+        body: StreamBuilder<List<QueryDocumentSnapshot>>(
+          // 🔥 यहाँ नया stream use करो
+          stream: _getNearbyWorkersStream(),
           builder: (context, snapshot) {
-  
-            if (snapshot.connectionState ==
-                ConnectionState.waiting) {
-              return const Center(
-                  child: CircularProgressIndicator());
+
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
             }
-  
-            if (!snapshot.hasData ||
-                snapshot.data!.docs.isEmpty) {
+
+            if (!snapshot.hasData || snapshot.data!.isEmpty) {
               return const Center(
-                  child: Text("कोई मजदूर उपलब्ध नहीं है"));
+                child: Text("10 KM के अंदर कोई मजदूर उपलब्ध नहीं है"),
+              );
             }
-  
-            var docs = snapshot.data!.docs;
-  
+
+            var docs = snapshot.data!;
+
             return ListView.builder(
-              padding:
-              const EdgeInsets.symmetric(vertical: 10),
+              padding: const EdgeInsets.symmetric(vertical: 10),
               itemCount: docs.length,
               itemBuilder: (context, index) {
-  
                 var doc = docs[index];
-                var data =
-                doc.data() as Map<String, dynamic>;
-  
+                var data = doc.data() as Map<String, dynamic>;
                 String workerId = doc.id;
-  
+
                 // 🔥 Apne aap ko list me mat dikhao
                 if (workerId == currentUserId) {
                   return const SizedBox();
                 }
-  
+
                 String audioUrl = data["audioUrl"] ?? "";
                 String name = data["name"] ?? "";
                 String work = data["workType"] ?? "";
                 String area = data["area"] ?? "";
                 String dp = data["dp"] ?? "";
-  
-                double distance =
-                (data["distance"] ?? 0).toDouble();
-  
+                double distance = (data["distance"] ?? 0).toDouble();
                 bool isAvailable = data["isAvailable"] ?? false;
-  
-                double rating =
-                (data["rating"] ?? 0.0).toDouble();
-  
-                int totalRatings =
-                (data["totalRatings"] ?? 0);
-  
+                double rating = (data["rating"] ?? 0.0).toDouble();
+                int totalRatings = (data["totalRatings"] ?? 0);
                 String? rate = data["rate"]?.toString();
-  
+
                 return Container(
-                  margin: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 10),
+                  margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
                     color: Colors.white,
@@ -3849,52 +4067,35 @@
                   ),
                   child: Column(
                     children: [
-  
                       /// ===== TOP SECTION =====
                       Row(
                         children: [
-  
-                          /// DP with Green Ring
                           Container(
                             padding: const EdgeInsets.all(3),
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               border: Border.all(
-                                color: isAvailable
-                                    ? Colors.green
-                                    : Colors.grey,
+                                color: isAvailable ? Colors.green : Colors.grey,
                                 width: 2,
                               ),
                             ),
                             child: CircleAvatar(
                               radius: 30,
-                              backgroundImage:
-                              dp.isNotEmpty
-                                  ? NetworkImage(dp)
-                                  : null,
+                              backgroundImage: dp.isNotEmpty ? NetworkImage(dp) : null,
                               child: dp.isEmpty
                                   ? Text(
-                                name.isNotEmpty
-                                    ? name[0]
-                                    : "",
+                                name.isNotEmpty ? name[0] : "",
                                 style: const TextStyle(
-                                    fontSize: 20,
-                                    fontWeight:
-                                    FontWeight.bold),
+                                    fontSize: 20, fontWeight: FontWeight.bold),
                               )
                                   : null,
                             ),
                           ),
-  
                           const SizedBox(width: 14),
-  
                           Expanded(
                             child: Column(
-                              crossAxisAlignment:
-                              CrossAxisAlignment.start,
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-  
-                                /// Name + Active
                                 Row(
                                   children: [
                                     Expanded(
@@ -3902,34 +4103,24 @@
                                         name,
                                         style: const TextStyle(
                                           fontSize: 17,
-                                          fontWeight:
-                                          FontWeight.w600,
+                                          fontWeight: FontWeight.w600,
                                         ),
                                       ),
                                     ),
                                     Icon(Icons.circle,
                                         size: 10,
-                                        color: isAvailable
-                                            ? Colors.green
-                                            : Colors.grey),
+                                        color: isAvailable ? Colors.green : Colors.grey),
                                     const SizedBox(width: 4),
                                     Text(
-                                      isAvailable
-                                          ? "Active"
-                                          : "Offline",
+                                      isAvailable ? "Active" : "Offline",
                                       style: TextStyle(
                                         fontSize: 12,
-                                        color: isAvailable
-                                            ? Colors.green
-                                            : Colors.grey,
+                                        color: isAvailable ? Colors.green : Colors.grey,
                                       ),
                                     ),
                                   ],
                                 ),
-  
                                 const SizedBox(height: 4),
-  
-                                /// Work Type
                                 Text(
                                   work,
                                   style: const TextStyle(
@@ -3942,15 +4133,11 @@
                           ),
                         ],
                       ),
-  
                       const Divider(height: 20),
-  
                       /// Location + Distance
                       Row(
                         children: [
-                          const Icon(Icons.location_on,
-                              size: 16,
-                              color: Colors.grey),
+                          const Icon(Icons.location_on, size: 16, color: Colors.grey),
                           const SizedBox(width: 6),
                           Text(
                             "$area • ${distance < 1000
@@ -3963,30 +4150,21 @@
                           ),
                         ],
                       ),
-  
                       const Divider(height: 20),
-  
                       /// Rating + Rate
                       Row(
-                        mainAxisAlignment:
-                        MainAxisAlignment.spaceBetween,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-  
                           Row(
                             children: [
-                              const Icon(Icons.star,
-                                  size: 16,
-                                  color: Colors.orange),
+                              const Icon(Icons.star, size: 16, color: Colors.orange),
                               const SizedBox(width: 4),
                               Text(
                                 "${rating.toStringAsFixed(1)} ($totalRatings)",
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                ),
+                                style: const TextStyle(fontSize: 13),
                               ),
                             ],
                           ),
-  
                           Text(
                             rate != null && rate.isNotEmpty
                                 ? "₹$rate / Day"
@@ -3999,24 +4177,19 @@
                           ),
                         ],
                       ),
-  
                       const SizedBox(height: 16),
-  
                       /// Bottom Buttons
                       Row(
                         children: [
-  
                           Expanded(
                             child: GestureDetector(
                               onTap: () async {
-  
                                 if (audioUrl.isEmpty) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(content: Text("No intro available")),
                                   );
                                   return;
                                 }
-  
                                 final player = AudioPlayer();
                                 await player.setUrl(audioUrl);
                                 player.play();
@@ -4041,7 +4214,6 @@
                             ),
                           ),
                           const SizedBox(width: 12),
-
                           Expanded(
                             child: SizedBox(
                               height: 40,
@@ -4053,45 +4225,31 @@
                                     .where("status", isEqualTo: "pending")
                                     .snapshots(),
                                 builder: (context, snapshot) {
-
-                                  bool isPending =
-                                      snapshot.hasData && snapshot.data!.docs.isNotEmpty;
-
+                                  bool isPending = snapshot.hasData && snapshot.data!.docs.isNotEmpty;
                                   return ElevatedButton(
                                     onPressed: isPending
                                         ? null
                                         : () async {
-
                                       try {
-
                                         await sendHireRequest(
                                           senderId: currentUserId,
                                           receiverId: workerId,
                                         );
-
                                       } catch (e) {
-
                                         ScaffoldMessenger.of(context).showSnackBar(
                                           SnackBar(content: Text(e.toString())),
                                         );
-
                                       }
-
                                     },
-
                                     style: ElevatedButton.styleFrom(
-                                      backgroundColor:
-                                      isPending ? Colors.grey : Colors.green,
+                                      backgroundColor: isPending ? Colors.grey : Colors.green,
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(25),
                                       ),
                                     ),
-
                                     child: Text(
                                       isPending ? "Pending" : "Hire ₹5",
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                      ),
+                                      style: const TextStyle(fontWeight: FontWeight.bold),
                                     ),
                                   );
                                 },
@@ -4112,24 +4270,24 @@
   }
   Future<void> submitRating(
       String workerId, double newRating) async {
-  
+
     final workerRef =
     FirebaseFirestore.instance.collection("users").doc(workerId);
-  
+
     final snapshot = await workerRef.get();
-  
+
     if (snapshot.exists) {
-  
+
       double currentRating =
       (snapshot["rating"] ?? 0).toDouble();
-  
+
       int totalRatings =
       (snapshot["totalRatings"] ?? 0);
-  
+
       double updatedRating =
           ((currentRating * totalRatings) + newRating) /
               (totalRatings + 1);
-  
+
       await workerRef.update({
         "rating": updatedRating,
         "totalRatings": totalRatings + 1,
@@ -4192,7 +4350,7 @@
         "senderPaid": true,
         "receiverPaid": false,
         "status": "pending",
-        "createdAt": Timestamp.now(),
+        "createdAt": FieldValue.serverTimestamp(),
       });
 
     });
@@ -4222,8 +4380,8 @@
     double rating = (data["rating"] ?? 0.0).toDouble();
     int totalRatings = data["totalRatings"] ?? 0;
     String? rate = data["rate"]?.toString();
-  
-  
+
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       padding: const EdgeInsets.all(16),
@@ -4240,11 +4398,11 @@
       ),
       child: Column(
         children: [
-  
+
           /// ===== TOP SECTION =====
           Row(
             children: [
-  
+
               Container(
                 padding: const EdgeInsets.all(3),
                 decoration: BoxDecoration(
@@ -4263,9 +4421,9 @@
                       : null,
                 ),
               ),
-  
+
               const SizedBox(width: 14),
-  
+
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -4328,9 +4486,9 @@
               ),
             ],
           ),
-  
+
           const Divider(height: 20),
-  
+
           /// Location + Distance
           Row(
             children: [
@@ -4347,9 +4505,9 @@
               ),
             ],
           ),
-  
+
           const Divider(height: 20),
-  
+
           /// Rating + Rate
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -4503,8 +4661,9 @@
 
                             String error = e.toString();
 
-                            if (error.contains("BALANCE_REQUIRED")) {
+                            if (error.toString().contains("BALANCE_REQUIRED")) {
 
+                              // 🔔 Message दिखाओ
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
                                   content: Text(
@@ -4517,6 +4676,7 @@
                                 ),
                               );
 
+                              // 🚀 Wallet Screen खोलो
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
@@ -4526,6 +4686,7 @@
 
                             } else {
 
+                              // ❌ Other Error
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
                                   content: Text(
@@ -4537,6 +4698,7 @@
                                   ),
                                 ),
                               );
+
                             }
                           }
                         },
@@ -4564,18 +4726,14 @@
     );
   }
   //================= THEKEDAR LIST =================
-  
+
   class ThekedarListScreen extends StatefulWidget {
-
-
     const ThekedarListScreen({super.key});
 
-
-  
     @override
     State<ThekedarListScreen> createState() => _ThekedarListScreenState();
   }
-  
+
   class _ThekedarListScreenState extends State<ThekedarListScreen> {
 
     final AudioPlayer audioPlayer = AudioPlayer();
@@ -4588,38 +4746,91 @@
         print("Audio error: $e");
       }
     }
-  
-    // 🔥 ₹5 + ₹5 Commission System
+
+    // 🔥 नया function: सिर्फ 10 KM के अंदर वाले ठेकेदार लाने के लिए
+    Stream<List<QueryDocumentSnapshot>> _getNearbyEmployersStream() async* {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        yield [];
+        return;
+      }
+
+      // अपनी current location लो
+      Position currentPosition;
+      try {
+        currentPosition = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.best,
+        );
+      } catch (e) {
+        print("Location error: $e");
+        yield [];
+        return;
+      }
+
+      double userLat = currentPosition.latitude;
+      double userLng = currentPosition.longitude;
+
+      // सारे available ठेकेदार लो
+      QuerySnapshot snapshot = await FirebaseFirestore.instance
+          .collection("users")
+          .where("role", isEqualTo: "employer")
+          .where("isAvailable", isEqualTo: true)
+          .get();
+
+      List<QueryDocumentSnapshot> nearbyEmployers = [];
+
+      for (var doc in snapshot.docs) {
+        // अपने आप को skip करो
+        if (doc.id == user.uid) continue;
+
+        var data = doc.data() as Map<String, dynamic>;
+        double employerLat = (data["latitude"] ?? 0).toDouble();
+        double employerLng = (data["longitude"] ?? 0).toDouble();
+
+        // अगर location missing है तो skip
+        if (employerLat == 0 || employerLng == 0) continue;
+
+        double distance = Geolocator.distanceBetween(
+          userLat,
+          userLng,
+          employerLat,
+          employerLng,
+        );
+
+        // 🔥 MAIN FILTER: सिर्फ 10 KM के अंदर वाले
+        if (distance <= 10000) {
+          // दूरी data में add करो (UI में दिखाने के लिए)
+          data["distance"] = distance;
+          nearbyEmployers.add(doc);
+        }
+      }
+
+      // नजदीक वाले पहले दिखें
+      nearbyEmployers.sort((a, b) {
+        double distA = (a.data() as Map<String, dynamic>)["distance"] ?? 0;
+        double distB = (b.data() as Map<String, dynamic>)["distance"] ?? 0;
+        return distA.compareTo(distB);
+      });
+
+      yield nearbyEmployers;
+    }
+
+    // 🔥 ₹5 Commission System
     Future<void> processHireWithCommission({
       required String user1Id,
       required String user2Id,
     }) async {
-
-      // 🔥 FREE MODE CONTROL (बस यही add किया है)
-      bool isFreeMode = true;
-
-      if (isFreeMode) {
-        return; // 🚀 payment skip
-      }
-
       const int commission = 5;
 
       await FirebaseFirestore.instance.runTransaction((transaction) async {
-
-        DocumentReference user1Ref =
-        FirebaseFirestore.instance.collection("users").doc(user1Id);
-
-        DocumentReference adminRef =
-        FirebaseFirestore.instance.collection("admin").doc("main");
+        DocumentReference user1Ref = FirebaseFirestore.instance.collection("users").doc(user1Id);
+        DocumentReference adminRef = FirebaseFirestore.instance.collection("admin").doc("main");
 
         DocumentSnapshot user1Snap = await transaction.get(user1Ref);
         DocumentSnapshot adminSnap = await transaction.get(adminRef);
 
-        Map<String, dynamic> user1Data =
-            user1Snap.data() as Map<String, dynamic>? ?? {};
-
-        Map<String, dynamic> adminData =
-            adminSnap.data() as Map<String, dynamic>? ?? {};
+        Map<String, dynamic> user1Data = user1Snap.data() as Map<String, dynamic>? ?? {};
+        Map<String, dynamic> adminData = adminSnap.data() as Map<String, dynamic>? ?? {};
 
         int user1Wallet = user1Data["wallet"] ?? 0;
         bool user1FreeUsed = user1Data["isFirstJobFreeUsed"] ?? false;
@@ -4629,7 +4840,6 @@
 
         // ================= USER 1 =================
         if (!user1FreeUsed) {
-
           transaction.update(user1Ref, {
             "isFirstJobFreeUsed": true,
           });
@@ -4640,12 +4850,10 @@
               "amount": 0,
               "type": "info",
               "message": "First Job Free",
-              "createdAt": Timestamp.now(),
+              "createdAt": FieldValue.serverTimestamp(),
             },
           );
-
         } else {
-
           if (user1Wallet < commission) {
             throw Exception("₹5 Balance Required");
           }
@@ -4660,7 +4868,7 @@
               "amount": commission,
               "type": "debit",
               "message": "Platform Fee",
-              "createdAt": Timestamp.now(),
+              "createdAt": FieldValue.serverTimestamp(),
             },
           );
 
@@ -4669,7 +4877,6 @@
 
         // ================= ADMIN =================
         if (totalCommission > 0) {
-
           if (!adminSnap.exists) {
             transaction.set(adminRef, {
               "wallet": totalCommission,
@@ -4688,24 +4895,19 @@
               "amount": totalCommission,
               "type": "credit",
               "message": "Platform Commission",
-              "createdAt": Timestamp.now(),
+              "createdAt": FieldValue.serverTimestamp(),
             },
           );
         }
       });
     }
 
-
-  
     @override
     Widget build(BuildContext context) {
-  
-      String currentUserId =
-          FirebaseAuth.instance.currentUser!.uid;
-  
+      String currentUserId = FirebaseAuth.instance.currentUser!.uid;
+
       return Scaffold(
         backgroundColor: const Color(0xFFF2F2F2),
-  
         appBar: AppBar(
           title: const Text("ठेकेदार लिस्ट",
               style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
@@ -4713,60 +4915,46 @@
           elevation: 0,
           iconTheme: const IconThemeData(color: Colors.black),
         ),
-
-
-  
-        body: StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection("users")
-              .where("role", isEqualTo: "employer")
-              .where("isAvailable", isEqualTo: true)
-              .snapshots(),
+        body: StreamBuilder<List<QueryDocumentSnapshot>>(
+          // 🔥 यहाँ नया stream use करो
+          stream: _getNearbyEmployersStream(),
           builder: (context, snapshot) {
-  
-            if (snapshot.connectionState ==
-                ConnectionState.waiting) {
-              return const Center(
-                  child: CircularProgressIndicator());
+
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
             }
-  
-            if (!snapshot.hasData ||
-                snapshot.data!.docs.isEmpty) {
+
+            if (!snapshot.hasData || snapshot.data!.isEmpty) {
               return const Center(
-                  child: Text("कोई ठेकेदार उपलब्ध नहीं है"));
+                child: Text("10 KM के अंदर कोई ठेकेदार उपलब्ध नहीं है"),
+              );
             }
-  
-            var docs = snapshot.data!.docs;
-  
+
+            var docs = snapshot.data!;
+
             return ListView.builder(
-              padding:
-              const EdgeInsets.symmetric(vertical: 10),
+              padding: const EdgeInsets.symmetric(vertical: 10),
               itemCount: docs.length,
               itemBuilder: (context, index) {
-  
                 var doc = docs[index];
-                var data =
-                doc.data() as Map<String, dynamic>;
-  
+                var data = doc.data() as Map<String, dynamic>;
                 String thekedarId = doc.id;
-  
+
                 if (thekedarId == currentUserId) {
                   return const SizedBox();
                 }
-  
+
                 String name = data["name"] ?? "";
                 String work = data["workType"] ?? "";
                 String area = data["area"] ?? "";
                 String dp = data["dp"] ?? "";
-
-
 
                 return buildMazdoorCard(
                   context: context,
                   currentUserId: currentUserId,
                   workerId: thekedarId,
                   data: data,
-                  playAudio: playAudio, // 🔥 ADD THIS
+                  playAudio: playAudio,
                   processHireWithCommission: processHireWithCommission,
                   isThekedar: true,
                 );
@@ -4780,73 +4968,144 @@
   //==============WalletScreen================
   class WalletScreen extends StatefulWidget {
     const WalletScreen({super.key});
-  
+
     @override
     State<WalletScreen> createState() => _WalletScreenState();
   }
-  
+
   class _WalletScreenState extends State<WalletScreen> {
-  
 
+    late Razorpay _razorpay;
 
-  
+    int selectedAmount = 50;
+    TextEditingController amountController = TextEditingController();
+
     @override
     void initState() {
       super.initState();
-  
 
-  
+      _razorpay = Razorpay();
 
+      _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _handlePaymentSuccess);
+      _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _handlePaymentError);
     }
-  
 
-  
+    @override
+    void dispose() {
+      _razorpay.clear();
+      amountController.dispose();
+      super.dispose();
+    }
 
-  
+    // 🔥 Razorpay open
+    void openCheckout(int amount) {
+      var options = {
+        'key': 'rzp_live_SYYQBs3VQNeGTX',
+        'amount': amount * 100,
+        'name': 'KaamDwaar',
+        'description': 'Wallet Recharge',
+      };
 
-  
+      _razorpay.open(options);
+    }
 
-  
+    // ✅ SUCCESS
+    void _handlePaymentSuccess(PaymentSuccessResponse response) async {
+      int amount = amountController.text.isNotEmpty
+          ? int.parse(amountController.text)
+          : selectedAmount;
+
+      await addMoneyToWallet(amount);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("₹$amount added successfully")),
+      );
+    }
+
+    // ❌ ERROR
+    void _handlePaymentError(PaymentFailureResponse response) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Payment Failed")),
+      );
+    }
+
+    // 💰 FIRESTORE UPDATE
+    Future<void> addMoneyToWallet(int amount) async {
+      String uid = FirebaseAuth.instance.currentUser!.uid;
+
+      await FirebaseFirestore.instance
+          .collection("users")
+          .doc(uid)
+          .update({
+        "wallet": FieldValue.increment(amount),
+      });
+    }
+
+    // 🔥 AMOUNT BUTTON
+    Widget _amountButton(int amount) {
+      bool isSelected = selectedAmount == amount;
+
+      return GestureDetector(
+        onTap: () {
+          setState(() {
+            selectedAmount = amount;
+            amountController.clear();
+          });
+        },
+        child: Container(
+          padding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          decoration: BoxDecoration(
+            color: isSelected ? Colors.green : Colors.grey.shade200,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Text(
+            "₹$amount",
+            style: TextStyle(
+              color: isSelected ? Colors.white : Colors.black,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      );
+    }
+
     @override
     Widget build(BuildContext context) {
-  
+
       String uid = FirebaseAuth.instance.currentUser!.uid;
-  
+
       return Scaffold(
         backgroundColor: const Color(0xFFF2F2F2),
 
         appBar: AppBar(
-          title: Text(
-            t(context, "My Wallet", "मेरा वॉलेट"),
-          ),
+          title: Text("My Wallet"),
           backgroundColor: Colors.green,
         ),
-  
+
         body: StreamBuilder<DocumentSnapshot>(
           stream: FirebaseFirestore.instance
               .collection("users")
               .doc(uid)
               .snapshots(),
-          builder: (context, userSnapshot) {
-  
-            if (!userSnapshot.hasData) {
+          builder: (context, snapshot) {
+
+            if (!snapshot.hasData) {
               return const Center(child: CircularProgressIndicator());
             }
-  
+
             var userData =
-            userSnapshot.data!.data() as Map<String, dynamic>;
-  
+            snapshot.data!.data() as Map<String, dynamic>;
+
             int wallet = userData["wallet"] ?? 0;
-  
+
             return SingleChildScrollView(
               padding: const EdgeInsets.all(20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-  
-                  // 💰 BALANCE CARD
+
+                  // 💰 BALANCE
                   Container(
-                    width: 220,
                     padding: const EdgeInsets.all(25),
                     decoration: BoxDecoration(
                       gradient: const LinearGradient(
@@ -4857,199 +5116,190 @@
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        Text("Total Balance",
+                            style: TextStyle(color: Colors.white70)),
+                        SizedBox(height: 10),
                         Text(
-                          t(context, "Total Balance", "कुल बैलेंस"),
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 16,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        Text(
-                          "₹${wallet.toStringAsFixed(2)}",
-                          style: const TextStyle(
+                          "₹$wallet",
+                          style: TextStyle(
                             color: Colors.white,
-                            fontSize: 32,
+                            fontSize: 30,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
                       ],
                     ),
                   ),
-  
-                  const SizedBox(height: 40),
 
-                  Text(
-                    t(context, "Recharge", "रिचार्ज करें"),
-                    style: const TextStyle(
-                      color: Colors.green,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
+                  const SizedBox(height: 30),
+
+                  Text("Recharge",
+                      style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.green)),
+
+                  const SizedBox(height: 10),
+
+                  Wrap(
+                    spacing: 10,
+                    children: [
+                      _amountButton(30),
+                      _amountButton(50),
+                      _amountButton(100),
+                    ],
+                  ),
+
+                  const SizedBox(height: 15),
+
+                  // 💵 CUSTOM INPUT
+                  TextField(
+                    controller: amountController,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      hintText: "Enter custom amount",
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                   ),
-  
-                  const SizedBox(height: 15),
-  
-                  // 💵 Amount Input
 
-  
                   const SizedBox(height: 20),
-  
-                  // 🔋 Recharge Button
+
+                  // 🔋 BUTTON
                   SizedBox(
                     width: double.infinity,
                     height: 55,
                     child: ElevatedButton(
                       onPressed: () {
-  
+                        int finalAmount = amountController.text.isNotEmpty
+                            ? int.parse(amountController.text)
+                            : selectedAmount;
 
-
-
-
-
-                        // ✅ PAYMENT OPEN
-
+                        openCheckout(finalAmount);
                       },
-
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.green,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(30),
                         ),
                       ),
-                      child: Text(
-                        t(context, "Recharge", "रिचार्ज करें"),
-                        style: const TextStyle(fontSize: 18),
-                      ),
+                      child: Text("Recharge"),
                     ),
                   ),
-  
-                  const SizedBox(height: 40),
 
+                  SizedBox(height: 20),
+
+                  // 🔥 TITLE
                   Text(
-                    t(context, "Transaction History", "ट्रांजेक्शन हिस्ट्री"),
-                    style: const TextStyle(
-                      color: Colors.green,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    "Transactions",
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
-  
-                  const SizedBox(height: 10),
-  
-                  StreamBuilder<QuerySnapshot>(
-                    stream: FirebaseFirestore.instance
-                        .collection("users")
-                        .doc(uid)
-                        .collection("transactions")
 
-                        .snapshots(),
-                    builder: (context, snapshot) {
+                  SizedBox(height: 10),
 
-                      if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                        return Text(
-                          t(
-                            context,
-                            "No transactions found",
-                            "कोई ट्रांजेक्शन नहीं मिला",
-                          ),
-                          style: const TextStyle(color: Colors.grey),
+                  // 🔥 TRANSACTION LIST
+                  SizedBox(
+                    height: 300,
+                    child: StreamBuilder(
+                      stream: FirebaseFirestore.instance
+                          .collection("users")
+                          .doc(FirebaseAuth.instance.currentUser!.uid)
+                          .collection("transactions")
+                          .orderBy("createdAt", descending: true)
+                          .snapshots(),
+                      builder: (context, snapshot) {
+
+                        if (!snapshot.hasData) {
+                          return Center(child: CircularProgressIndicator());
+                        }
+
+                        var docs = snapshot.data!.docs;
+
+                        if (docs.isEmpty) {
+                          return Center(child: Text("No transactions yet"));
+                        }
+
+                        return ListView.builder(
+                          itemCount: docs.length,
+                          itemBuilder: (context, index) {
+
+                            var data = docs[index].data() as Map<String, dynamic>;
+
+                            bool isDebit = data["type"] == "debit";
+
+                            return ListTile(
+                              leading: Icon(
+                                isDebit ? Icons.arrow_downward: Icons.arrow_upward,
+                                color: isDebit ? Colors.red : Colors.green,
+                              ),
+                              title: Text(
+                                "₹${data["amount"]}",
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: isDebit ? Colors.red : Colors.green,
+                                ),
+                              ),
+                              subtitle: Text(
+                                data["reason"] ?? data["message"] ?? "No info",
+                              ),
+                              trailing: Text(data["type"]),
+                            );
+                          },
                         );
-                      }
-  
-                      return ListView.builder(
-                        shrinkWrap: true,
-                        physics:
-                        const NeverScrollableScrollPhysics(),
-                        itemCount: snapshot.data!.docs.length,
-                        itemBuilder: (context, index) {
-  
-                          var data =
-                          snapshot.data!.docs[index];
-  
-                          int amount = data["amount"];
-                          String type = data["type"];
-                          String message = data["message"];
-  
-                          bool isCredit =
-                              type == "credit";
-  
-                          return ListTile(
-                            leading: CircleAvatar(
-                              backgroundColor: isCredit
-                                  ? Colors.green
-                                  : Colors.red,
-                              child: Icon(
-                                isCredit
-                                    ? Icons.arrow_upward
-                                    : Icons.arrow_downward,
-                                color: Colors.white,
-                              ),
-                            ),
-                            title: Text(message),
-                            trailing: Text(
-                              "${isCredit ? "+" : "-"}₹$amount",
-                              style: TextStyle(
-                                color: isCredit
-                                    ? Colors.green
-                                    : Colors.red,
-                                fontWeight:
-                                FontWeight.bold,
-                              ),
-                            ),
-                          );
-                        },
-                      );
-                    },
+                      },
+                    ),
                   ),
                 ],
-              ),
+              )
             );
           },
         ),
       );
     }
   }
+
+
   Future<void> hireWorker({
     required String contractorId,
     required String workerId,
     required int amount,
   }) async {
-  
+
     FirebaseFirestore.instance.runTransaction((transaction) async {
-  
+
       DocumentReference contractorRef =
       FirebaseFirestore.instance.collection("users").doc(contractorId);
-  
+
       DocumentReference workerRef =
       FirebaseFirestore.instance.collection("users").doc(workerId);
-  
+
       DocumentSnapshot contractorSnap =
       await transaction.get(contractorRef);
-  
+
       DocumentSnapshot workerSnap =
       await transaction.get(workerRef);
-  
+
       int contractorWallet =
           contractorSnap["wallet"] ?? 0;
-  
+
       if (contractorWallet < amount) {
         throw Exception("Insufficient Balance");
       }
-  
+
       // 🔻 Deduct from Contractor
       transaction.update(contractorRef, {
         "wallet": contractorWallet - amount,
       });
-  
+
       // 🔺 Add to Worker
       int workerWallet =
           workerSnap["wallet"] ?? 0;
-  
+
       transaction.update(workerRef, {
         "wallet": workerWallet + amount,
       });
-  
+
       // 🔥 Contractor Transaction
       transaction.set(
         contractorRef.collection("transactions").doc(),
@@ -5057,10 +5307,10 @@
           "amount": amount,
           "type": "debit",
           "message": "Worker Hire Payment",
-          "createdAt": Timestamp.now(),
+          "createdAt": FieldValue.serverTimestamp(),
         },
       );
-  
+
       // 🔥 Worker Transaction
       transaction.set(
         workerRef.collection("transactions").doc(),
@@ -5068,21 +5318,21 @@
           "amount": amount,
           "type": "credit",
           "message": "Job Payment Received",
-          "createdAt": Timestamp.now(),
+          "createdAt": FieldValue.serverTimestamp(),
         },
       );
     });
   }
-  
+
   class IncomingRequestsScreen extends StatelessWidget {
     const IncomingRequestsScreen({super.key});
-  
+
     @override
     Widget build(BuildContext context) {
-  
+
       String currentUserId =
           FirebaseAuth.instance.currentUser!.uid;
-  
+
       return Scaffold(
         appBar: AppBar(
           title: const Text("Incoming Requests"),
@@ -5095,20 +5345,20 @@
               .where("status", isEqualTo: "pending")
               .snapshots(),
           builder: (context, snapshot) {
-  
+
             if (!snapshot.hasData ||
                 snapshot.data!.docs.isEmpty) {
               return const Center(
                 child: Text("No Incoming Requests"),
               );
             }
-  
+
             var docs = snapshot.data!.docs;
-  
+
             return ListView.builder(
               itemCount: docs.length,
               itemBuilder: (context, index) {
-  
+
                 var request = docs[index];
 
                 return ListTile(
@@ -5221,18 +5471,261 @@
     }
   }
 
-  class HireHistoryScreen extends StatelessWidget {
+  class HireHistoryScreen extends StatefulWidget {
     const HireHistoryScreen({super.key});
 
     @override
-    Widget build(BuildContext context) {
-      return Scaffold(
-        appBar: AppBar(title: const Text("Hire History")),
-        body: const Center(child: Text("History Coming Soon")),
-      );
-    }
+    State<HireHistoryScreen> createState() => _HireHistoryScreenState();
   }
 
+  class _HireHistoryScreenState extends State<HireHistoryScreen> {
+
+    @override
+    Widget build(BuildContext context) {
+      String uid = FirebaseAuth.instance.currentUser!.uid;
+
+      return Scaffold(
+        appBar: AppBar(
+          title: Text(
+            t(context, "Hire History", "भर्ती इतिहास"),
+          ),
+          backgroundColor: Colors.green,
+          foregroundColor: Colors.white,
+        ),
+        body: DefaultTabController(
+          length: 2,
+          child: Column(
+            children: [
+              Container(
+                color: Colors.white,
+                child: TabBar(
+                  labelColor: Colors.green,
+                  unselectedLabelColor: Colors.grey,
+                  indicatorColor: Colors.green,
+                  tabs: [
+                    Tab(text: t(context, "Sent", "भेजी गई")),
+                    Tab(text: t(context, "Received", "प्राप्त हुई")),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: TabBarView(
+                  children: [
+                    // Sent Requests Tab
+                    _buildHistoryList(
+                      stream: FirebaseFirestore.instance
+                          .collection("hireRequests")
+                          .where("senderId", isEqualTo: uid)
+                          .where("status", whereIn: ["accepted", "rejected", "expired"])
+                          .orderBy("createdAt", descending: true)
+                          .snapshots(),
+                      isSender: true,
+                    ),
+                    // Received Requests Tab
+                    _buildHistoryList(
+                      stream: FirebaseFirestore.instance
+                          .collection("hireRequests")
+                          .where("receiverId", isEqualTo: uid)
+                          .where("status", whereIn: ["accepted", "rejected", "expired"])
+                          .orderBy("createdAt", descending: true)
+                          .snapshots(),
+                      isSender: false,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    Widget _buildHistoryList({
+      required Stream<QuerySnapshot> stream,
+      required bool isSender,
+    }) {
+      return StreamBuilder<QuerySnapshot>(
+        stream: stream,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+            return Center(
+              child: Text(
+                t(context, "No history found", "कोई इतिहास नहीं मिला"),
+                style: const TextStyle(color: Colors.grey),
+              ),
+            );
+          }
+
+          var docs = snapshot.data!.docs;
+
+          return ListView.builder(
+            padding: const EdgeInsets.all(12),
+            itemCount: docs.length,
+            itemBuilder: (context, index) {
+              var data = docs[index].data() as Map<String, dynamic>;
+              return _buildHistoryCard(context, data, isSender);
+            },
+          );
+        },
+      );
+    }
+
+    Widget _buildHistoryCard(BuildContext context, Map<String, dynamic> data, bool isSender) {
+      String otherUserId = isSender ? data["receiverId"] : data["senderId"];
+      String status = data["status"] ?? "pending";
+      Timestamp createdAt = data["createdAt"];
+
+      DateTime dateTime = createdAt.toDate();
+
+      // Status ke hisaab se color aur icon
+      Color statusColor;
+      IconData statusIcon;
+      String statusText;
+
+      switch (status) {
+        case "accepted":
+          statusColor = Colors.green;
+          statusIcon = Icons.check_circle;
+          statusText = t(context, "Accepted", "स्वीकृत");
+          break;
+        case "rejected":
+          statusColor = Colors.red;
+          statusIcon = Icons.cancel;
+          statusText = t(context, "Rejected", "अस्वीकृत");
+          break;
+        case "expired":
+          statusColor = Colors.orange;
+          statusIcon = Icons.timer_off;
+          statusText = t(context, "Expired", "समाप्त");
+          break;
+        default:
+          statusColor = Colors.grey;
+          statusIcon = Icons.hourglass_empty;
+          statusText = status;
+      }
+
+      return FutureBuilder<DocumentSnapshot>(
+        future: FirebaseFirestore.instance
+            .collection("users")
+            .doc(otherUserId)
+            .get(),
+        builder: (context, userSnapshot) {
+          if (!userSnapshot.hasData) {
+            return Card(
+              margin: const EdgeInsets.only(bottom: 12),
+              elevation: 2,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: const ListTile(
+                leading: CircleAvatar(child: Icon(Icons.person)),
+                title: Text("Loading..."),
+              ),
+            );
+          }
+
+          var userData = userSnapshot.data!.data() as Map<String, dynamic>? ?? {};
+          String name = userData["name"] ?? "Unknown User";
+          String work = userData["workType"] ?? "";
+          String dp = userData["dp"] ?? "";
+          String area = userData["area"] ?? "";
+
+          return Card(
+            margin: const EdgeInsets.only(bottom: 12),
+            elevation: 2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: ListTile(
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              leading: CircleAvatar(
+                radius: 28,
+                backgroundImage: dp.isNotEmpty ? NetworkImage(dp) : null,
+                child: dp.isEmpty ? const Icon(Icons.person, size: 28) : null,
+              ),
+              title: Text(
+                name,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (work.isNotEmpty)
+                    Text(work, style: const TextStyle(fontSize: 12, color: Colors.blue)),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Icon(Icons.location_on, size: 12, color: Colors.grey),
+                      const SizedBox(width: 2),
+                      Text(
+                        area.isNotEmpty ? area : "Location not set",
+                        style: const TextStyle(fontSize: 11, color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    "${_formatDate(dateTime)} • ${_formatTime(dateTime)}",
+                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                ],
+              ),
+              trailing: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: statusColor.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(statusIcon, size: 14, color: statusColor),
+                    const SizedBox(width: 4),
+                    Text(
+                      statusText,
+                      style: TextStyle(fontSize: 11, color: statusColor, fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+              ),
+              onTap: () {
+                // अगर accepted है तो worker details देख सकता है
+                if (status == "accepted") {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => WorkerDetailScreen(
+                        name: name,
+                        work: work,
+                        area: area,
+                        phone: userData["phone"] ?? "",
+                        lat: (userData["latitude"] ?? 0).toDouble(),
+                        lng: (userData["longitude"] ?? 0).toDouble(),
+                        rating: (userData["rating"] ?? 0).toDouble(),
+                        introAudio: userData["audioUrl"] ?? "",
+                      ),
+                    ),
+                  );
+                }
+              },
+            ),
+          );
+        },
+      );
+    }
+
+    String _formatDate(DateTime date) {
+      return "${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}";
+    }
+
+    String _formatTime(DateTime date) {
+      return "${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}";
+    }
+  }
   class EarningsReportScreen extends StatelessWidget {
     const EarningsReportScreen({super.key});
 
@@ -5267,73 +5760,87 @@
     }) async {
 
       // 🔥 FREE MODE CONTROL (बस यही add किया है)
-      bool isFreeMode = true;
 
-      if (isFreeMode) {
-        return; // 🚀 payment skip
-      }
 
       const int commission = 5;
 
       await FirebaseFirestore.instance.runTransaction((transaction) async {
 
-        DocumentReference user1Ref =
+        const int commission = 5;
+
+        final user1Ref =
         FirebaseFirestore.instance.collection("users").doc(user1Id);
 
-        DocumentReference adminRef =
+        final user2Ref =
+        FirebaseFirestore.instance.collection("users").doc(user2Id);
+
+        final adminRef =
         FirebaseFirestore.instance.collection("admin").doc("main");
 
-        DocumentSnapshot user1Snap = await transaction.get(user1Ref);
-        DocumentSnapshot adminSnap = await transaction.get(adminRef);
+        final user1Snap = await transaction.get(user1Ref);
+        final user2Snap = await transaction.get(user2Ref);
+        final adminSnap = await transaction.get(adminRef);
 
-        Map<String, dynamic> user1Data =
+        final user1Data =
             user1Snap.data() as Map<String, dynamic>? ?? {};
 
-        Map<String, dynamic> adminData =
+        final user2Data =
+            user2Snap.data() as Map<String, dynamic>? ?? {};
+
+        final adminData =
             adminSnap.data() as Map<String, dynamic>? ?? {};
 
         int user1Wallet = user1Data["wallet"] ?? 0;
-        bool user1FreeUsed = user1Data["isFirstJobFreeUsed"] ?? false;
+        int user2Wallet = user2Data["wallet"] ?? 0;
         int adminWallet = adminData["wallet"] ?? 0;
 
         int totalCommission = 0;
 
-        // 🔥 ONLY USER 1
-        if (!user1FreeUsed) {
-
-          // 🎁 FIRST JOB FREE
-          transaction.update(user1Ref, {
-            "isFirstJobFreeUsed": true,
-          });
-
-        } else {
-
-          // 💰 NORMAL PAYMENT
-          if (user1Wallet < commission) {
-            throw Exception("₹5 Balance Required");
-          }
-
-          transaction.update(user1Ref, {
-            "wallet": user1Wallet - commission,
-          });
-
-          totalCommission += commission;
+        // 💰 CHECK BOTH USERS
+        if (user1Wallet < commission) {
+          throw Exception("User1 ₹5 Balance Required");
         }
 
-        // 🔥 ADMIN
-        if (totalCommission > 0) {
-          if (!adminSnap.exists) {
-            transaction.set(adminRef, {
-              "wallet": totalCommission,
-              "totalEarning": totalCommission,
-            });
-          } else {
-            transaction.update(adminRef, {
-              "wallet": adminWallet + totalCommission,
-              "totalEarning": FieldValue.increment(totalCommission),
-            });
-          }
+        if (user2Wallet < commission) {
+          throw Exception("User2 ₹5 Balance Required");
         }
+
+        // 🔥 CUT BOTH
+        transaction.update(user1Ref, {
+          "wallet": user1Wallet - commission,
+        });
+
+        transaction.update(user2Ref, {
+          "wallet": user2Wallet - commission,
+        });
+
+        totalCommission = commission * 2;
+
+        // 🔥 ADMIN ADD
+        transaction.set(adminRef, {
+          "wallet": adminWallet + totalCommission,
+          "totalEarning": FieldValue.increment(totalCommission),
+        }, SetOptions(merge: true));
+
+        // 🔥 SAVE TRANSACTIONS (VERY IMPORTANT)
+        final txRef = FirebaseFirestore.instance.collection("transactions");
+
+        transaction.set(txRef.doc(), {
+          "userId": user1Id,
+          "amount": commission,
+          "type": "debit",
+          "reason": "Hire Commission",
+          "createdAt": FieldValue.serverTimestamp(),
+        });
+
+        transaction.set(txRef.doc(), {
+          "userId": user2Id,
+          "amount": commission,
+          "type": "debit",
+          "reason": "Hire Commission",
+          "createdAt": FieldValue.serverTimestamp(),
+        });
+
       });
     }
 
@@ -5486,7 +5993,6 @@
                             .doc(data["id"])
                             .update({
                           "receiverPaid": true,
-                          "senderPaid": true,
                         });
 
                         Navigator.pop(dialogContext);

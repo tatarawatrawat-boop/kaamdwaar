@@ -1996,7 +1996,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
           _bannerImage("assets/images/banner1.png"),
           _bannerImage("assets/images/banner2.png"),
-          _bannerImage("assets/images/banner1.png"),
+          _bannerImage("assets/images/banner3.png"),
 
         ],
       ),
