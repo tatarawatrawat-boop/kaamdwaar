@@ -27,8 +27,14 @@
   import 'package:flutter/material.dart';
   import 'package:vibration/vibration.dart';
   import 'settings_screen.dart';
+  import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+  import 'dart:typed_data';
+  import 'dart:convert';
+  import 'package:http/http.dart' as http;
 
 
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+  FlutterLocalNotificationsPlugin();
 
   Future<String> getAreaName(double lat, double lng) async {
     try {
@@ -63,6 +69,38 @@
 
   Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     await Firebase.initializeApp();
+
+    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+    AndroidNotificationDetails(
+      'hire_call_popup',
+      'Hire Requests',
+      channelDescription: 'Notifications for hire requests',
+
+      importance: Importance.max,
+      priority: Priority.high,
+
+      // 🔥 NEW
+      fullScreenIntent: true,
+      category: AndroidNotificationCategory.call,
+      ongoing: true,
+      autoCancel: false,
+      visibility: NotificationVisibility.public,
+
+      sound: RawResourceAndroidNotificationSound('ringtone'),
+      enableVibration: true,
+    );
+
+    const NotificationDetails platformChannelSpecifics =
+    NotificationDetails(
+      android: androidPlatformChannelSpecifics,
+    );
+
+    await flutterLocalNotificationsPlugin.show(
+      0,
+      "KaamDwaar Incoming Hire",
+      message.notification?.body ?? "Someone wants to hire you",
+      platformChannelSpecifics,
+    );
   }
 
   // 🔥 YAHAN ADD KARO
@@ -99,10 +137,33 @@
     WidgetsFlutterBinding.ensureInitialized();
     await Firebase.initializeApp();
 
+    // 🔥 Initialize local notifications (यहाँ add करें)
+    const AndroidInitializationSettings initializationSettingsAndroid =
+    AndroidInitializationSettings('@mipmap/ic_launcher');
+    final DarwinInitializationSettings initializationSettingsIOS =
+    DarwinInitializationSettings();
+    final InitializationSettings initializationSettings = InitializationSettings(
+      android: initializationSettingsAndroid,
+      iOS: initializationSettingsIOS,
+    );
+    await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+
     FirebaseMessaging.onBackgroundMessage(
         _firebaseMessagingBackgroundHandler);
 
     setupFCMListeners();
+
+    await FirebaseMessaging.instance.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+
+    await flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>()
+        ?.requestNotificationsPermission();
+
 
     // 🔥 ADD THIS (MOST IMPORTANT)
     RemoteMessage? initialMessage =
@@ -401,7 +462,6 @@
                           phoneNumber: "+91${phoneController.text.trim()}",
 
                           verificationCompleted: (PhoneAuthCredential credential) async {
-                            // 🔥 AUTO LOGIN (important)
                             await FirebaseAuth.instance.signInWithCredential(credential);
                           },
 
@@ -415,8 +475,10 @@
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (context) =>
-                                    OtpScreen(verificationId: verificationId),
+                                builder: (context) => OtpScreen(
+                                  verificationId: verificationId,
+                                  phoneNumber: "+91${phoneController.text.trim()}",  // 🔥 यह line add करें
+                                ),
                               ),
                             );
                           },
@@ -451,8 +513,9 @@
 
   class OtpScreen extends StatefulWidget {
     final String verificationId;
+    final String phoneNumber;
 
-    const OtpScreen({super.key, required this.verificationId});
+    const OtpScreen({super.key, required this.verificationId, required this.phoneNumber});
 
     @override
     State<OtpScreen> createState() => _OtpScreenState();
@@ -462,17 +525,82 @@
 
     final TextEditingController otpController = TextEditingController();
 
-    void verifyOTP() async {
+    // 🔥 Resend OTP ke liye variables
+    int _remainingSeconds = 60;
+    Timer? _timer;
+    bool _canResend = false;
 
+    @override
+    void initState() {
+      super.initState();
+      _startTimer();
+    }
+
+    @override
+    void dispose() {
+      _timer?.cancel();
+      otpController.dispose();
+      super.dispose();
+    }
+
+    void _startTimer() {
+      _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (mounted) {
+          setState(() {
+            if (_remainingSeconds > 0) {
+              _remainingSeconds--;
+            } else {
+              _canResend = true;
+              _timer?.cancel();
+            }
+          });
+        }
+      });
+    }
+
+    void _resendOTP() async {
+      setState(() {
+        _canResend = false;
+        _remainingSeconds = 60;
+      });
+
+      _startTimer();
+
+      await FirebaseAuth.instance.verifyPhoneNumber(
+        phoneNumber: widget.phoneNumber,
+        verificationCompleted: (PhoneAuthCredential credential) async {
+          await FirebaseAuth.instance.signInWithCredential(credential);
+        },
+        verificationFailed: (FirebaseAuthException e) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(e.message ?? "Verification Failed")),
+          );
+          setState(() {
+            _canResend = true;
+            _remainingSeconds = 0;
+          });
+        },
+        codeSent: (String verificationId, int? resendToken) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => OtpScreen(
+                verificationId: verificationId,
+                phoneNumber: widget.phoneNumber,
+              ),
+            ),
+          );
+        },
+        codeAutoRetrievalTimeout: (String verificationId) {},
+      );
+    }
+
+    void verifyOTP() async {
       if (otpController.text.length != 6) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              t(
-                context,
-                "Enter valid 6 digit OTP",
-                "कृपया 6 अंकों का सही OTP दर्ज करें",
-              ),
+              t(context, "Enter valid 6 digit OTP", "कृपया 6 अंकों का सही OTP दर्ज करें"),
             ),
           ),
         );
@@ -480,33 +608,26 @@
       }
 
       try {
-
-        PhoneAuthCredential credential =
-        PhoneAuthProvider.credential(
+        PhoneAuthCredential credential = PhoneAuthProvider.credential(
           verificationId: widget.verificationId,
           smsCode: otpController.text.trim(),
         );
 
-        await FirebaseAuth.instance
-            .signInWithCredential(credential);
+        await FirebaseAuth.instance.signInWithCredential(credential);
 
-        // 🔥 OTP Success → Role Screen
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (context) =>
-            const RoleSelectionScreen(),
+            builder: (context) => const AuthCheckScreen(),
           ),
         );
 
       } catch (e) {
-
         String errorMessage = t(
             context,
             "Invalid OTP. Please try again.",
             "गलत OTP है, कृपया फिर से कोशिश करें"
         );
-
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(errorMessage)),
         );
@@ -522,7 +643,6 @@
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-
               Text(
                 t(context, "Verify OTP", "OTP Verify करें"),
                 style: const TextStyle(
@@ -531,9 +651,7 @@
                   color: Colors.green,
                 ),
               ),
-
               const SizedBox(height: 30),
-
               TextField(
                 controller: otpController,
                 keyboardType: TextInputType.number,
@@ -553,6 +671,43 @@
                   ),
                 ),
               ),
+              const SizedBox(height: 25),
+
+              // 🔥 RESEND OTP BUTTON
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    _canResend
+                        ? t(context, "Didn't receive OTP?", "OTP नहीं मिला?")
+                        : t(context, "Resend OTP in", "OTP भेजने में बचा समय"),
+                    style: const TextStyle(color: Colors.grey),
+                  ),
+                  if (!_canResend) ...[
+                    const SizedBox(width: 5),
+                    Text(
+                      "00:${_remainingSeconds.toString().padLeft(2, '0')}",
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.orange,
+                      ),
+                    ),
+                  ],
+                  if (_canResend) ...[
+                    const SizedBox(width: 5),
+                    GestureDetector(
+                      onTap: _resendOTP,
+                      child: Text(
+                        t(context, " Resend", "पुनः भेजें"),
+                        style: const TextStyle(
+                          color: Colors.green,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
 
               const SizedBox(height: 25),
 
@@ -560,7 +715,7 @@
                 width: double.infinity,
                 height: 55,
                 child: ElevatedButton(
-                  onPressed: verifyOTP, // 🔥 IMPORTANT
+                  onPressed: verifyOTP,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.green,
                     shape: RoundedRectangleBorder(
@@ -811,7 +966,6 @@
     Future<void> _loadExistingData() async {
       setState(() {
         isLoading = true;
-        isEditMode = true;
       });
 
       final user = FirebaseAuth.instance.currentUser;
@@ -1132,7 +1286,7 @@
           "district": selectedDistrict,
           "pin": pinController.text.trim(),
           "dp": finalImageUrl ?? "",
-          "wallet": 50,
+          "wallet": 20,
           "welcomeBonusGiven": true,
           "isFirstJobFreeUsed": false,
           "totalJobs": 0,
@@ -1150,7 +1304,7 @@
 
         batch.set(txnRef, {
           "userId": user.uid,
-          "amount": 50,
+          "amount": 20,
           "type": "credit",
           "reason": "Welcome Bonus",
           "createdAt": FieldValue.serverTimestamp(),
@@ -1417,6 +1571,10 @@
 
   class _DashboardScreenState extends State<DashboardScreen> {
 
+    final PageController _bannerController = PageController();
+    int _currentBanner = 0;
+    Timer? _bannerTimer;
+
 
     bool isProcessing = false;
 
@@ -1449,6 +1607,27 @@
       }
     }
 
+    void startBannerAutoSlide() {
+      _bannerTimer = Timer.periodic(
+        const Duration(seconds: 3),
+            (timer) {
+          if (!_bannerController.hasClients) return;
+
+          _currentBanner++;
+
+          if (_currentBanner > 2) {
+            _currentBanner = 0;
+          }
+
+          _bannerController.animateToPage(
+            _currentBanner,
+            duration: const Duration(milliseconds: 500),
+            curve: Curves.easeInOut,
+          );
+        },
+      );
+    }
+
 
 
     Future<String?> uploadDashboardAudio(File file) async {
@@ -1479,6 +1658,20 @@
         print("❌ Upload error: $e");
         return null;
       }
+    }
+
+    @override
+    void dispose() {
+      _bannerTimer?.cancel();
+      _bannerController.dispose();
+
+      requestTimer?.cancel();
+      recordTimer?.cancel();
+
+      ringtonePlayer.dispose();
+      audioPlayer.dispose();
+
+      super.dispose();
     }
 
     // 🔥 यह पूरा function copy-paste करें
@@ -1796,10 +1989,13 @@
     void initState() {
       super.initState();
 
-      updateUserLocation();
+      startBannerAutoSlide();
+
+      _startLocationTracking();
 
       getUserData();
-      loadAudioUrl(); // 🔥 YAHI ADD KARNA HAI
+      loadAudioUrl();
+
 
       saveFCMToken();
       checkActiveRequest();
@@ -1807,7 +2003,6 @@
       listenIncomingRequests();
       listenReceiverPayment();
       listenBothPaymentComplete();
-
       listenSenderUpdates();
     }
 
@@ -2157,20 +2352,10 @@
       );
     }
 
-    Future<void> saveFCMToken() async {
 
-      String? token =
-      await FirebaseMessaging.instance.getToken();
 
-      if (token != null) {
-        await FirebaseFirestore.instance
-            .collection("users")
-            .doc(FirebaseAuth.instance.currentUser!.uid)
-            .update({
-          "fcmToken": token,
-        });
-      }
-    }
+
+
     // DATA FETCH KARNE KA FUNCTION
     void getUserData() async {
 
@@ -3577,6 +3762,7 @@
       return SizedBox(
         height: 150,
         child: PageView(
+          controller: _bannerController,
           children: [
 
             _bannerImage("assets/images/banner1.png"),
@@ -4295,12 +4481,62 @@
     }
   }
 
+  Future<void> saveFCMToken() async {
+
+    String? token =
+    await FirebaseMessaging.instance.getToken();
+
+    if (token != null) {
+      await FirebaseFirestore.instance
+          .collection("users")
+          .doc(FirebaseAuth.instance.currentUser!.uid)
+          .update({
+        "fcmToken": token,
+      });
+    }
+  }
+
+
+  Future<void> sendPushNotification(String token) async {
+    await http.post(
+      Uri.parse("https://fcm.googleapis.com/fcm/send"),
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "key=YOUR_SERVER_KEY"
+      },
+      body: jsonEncode({
+        "to": token,
+        "priority": "high",
+        "notification": {
+          "title": "New Hire Request",
+          "body": "Someone wants to hire you"
+        },
+        "data": {
+          "type": "hire_request"
+        }
+      }),
+    );
+  }
+
   Future<void> sendHireRequest({
     required String senderId,
     required String receiverId,
   }) async {
 
     const int fee = 5;
+
+    DocumentSnapshot senderDoc =
+    await FirebaseFirestore.instance
+        .collection("users")
+        .doc(senderId)
+        .get();
+
+    bool senderAvailable =
+        senderDoc["isAvailable"] ?? false;
+
+    if (!senderAvailable) {
+      throw Exception("You are offline. Go online first.");
+    }
 
     DocumentSnapshot receiverDoc =
     await FirebaseFirestore.instance
@@ -4322,7 +4558,8 @@
       DocumentReference requestRef =
       FirebaseFirestore.instance.collection("hireRequests").doc();
 
-      DocumentSnapshot senderSnap = await transaction.get(senderRef);
+      DocumentSnapshot senderSnap =
+      await transaction.get(senderRef);
 
       int wallet = senderSnap["wallet"] ?? 0;
 
@@ -4342,8 +4579,6 @@
         throw Exception("Please recharge wallet");
       }
 
-
-
       transaction.set(requestRef, {
         "senderId": senderId,
         "receiverId": receiverId,
@@ -4352,9 +4587,16 @@
         "status": "pending",
         "createdAt": FieldValue.serverTimestamp(),
       });
-
     });
+
+    // 🔥 Transaction ke baad Push Notification bhejo
+    String token = receiverDoc["fcmToken"] ?? "";
+
+    if (token.isNotEmpty) {
+      await sendPushNotification(token);
+    }
   }
+
 
   Widget buildMazdoorCard({
     required BuildContext context,
@@ -4993,6 +5235,7 @@
     @override
     void dispose() {
       _razorpay.clear();
+
       amountController.dispose();
       super.dispose();
     }

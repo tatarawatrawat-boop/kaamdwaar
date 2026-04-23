@@ -26,7 +26,6 @@ dependencies:
   cloud_firestore: ^4.17.3
   firebase_messaging: ^14.7.10
 
-
   # 💾 Local Storage
   shared_preferences: ^2.2.2
 
@@ -54,8 +53,8 @@ dependencies:
   vibration: ^3.1.8
   share_plus: ^10.0.0
 
-
-
+  # 🔔 Local Notifications (NEW - for background/closed app)
+  flutter_local_notifications: ^17.1.0
 
 dev_dependencies:
   flutter_test:
@@ -63,14 +62,12 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.13.1
 
-
 flutter:
   uses-material-design: true
 
   assets:
     - assets/images/
     - assets/sounds/
-
 
 flutter_icons:
   android: true
